@@ -1,0 +1,92 @@
+name: Gerar APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [ published ]   # ao publicar uma Release, o APK é anexado nela (e o app avisa quem já tem)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Configuração do Firebase (login e Leaderboard)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          else
+            echo "::warning::Segredo GOOGLE_SERVICES_JSON não configurado: o APK sai sem login e sem Leaderboard."
+          fi
+
+      - name: Chave de assinatura
+        env:
+          KEYSTORE_B64: ${{ secrets.ABYSS_DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/abyss.keystore"
+            echo "ABYSS_KEYSTORE_FILE=$RUNNER_TEMP/abyss.keystore" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Segredo ABYSS_DEBUG_KEYSTORE não configurado: o APK sai com uma chave temporária (o login com Google e a atualização por cima não funcionam nele)."
+          fi
+
+      - name: Compilar o Rust
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+        run: cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release --lib
+
+      - name: Montar o APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          APK=$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::O APK não foi gerado."
+            exit 1
+          fi
+          cp "$APK" ../AbyssHub.apk
+          ls -l ../AbyssHub.apk
+
+      - name: Guardar APK (aba Actions > Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AbyssHub
+          path: AbyssHub.apk
+          if-no-files-found: error
+
+      - name: Anexar o APK na Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AbyssHub.apk
+          fail_on_unmatched_files: true

@@ -1,0 +1,45 @@
+[package]
+name = "abysshub"
+version = "1.0.0"
+edition = "2021"
+description = "AbyssHub: veja quanto tempo você joga cada jogo no celular e compita no Leaderboard"
+license = "MIT"
+repository = "https://github.com/fbio3/AbyssHub"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "abysshub-desktop"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.31"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.31", features = ["android-native-activity"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+jni = "0.21"
+android_logger = "0.14"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(teste_isolado)"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "debuginfo"
+
+# Deixa o modo debug mais rápido sem perder muito tempo de compilação.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# O APK agora é montado pelo Gradle (pasta android/), igual ao AbyssSub.
+# Veja build-android.ps1.

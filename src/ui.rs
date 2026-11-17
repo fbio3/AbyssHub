@@ -1,0 +1,744 @@
+//! Interface do AbyssHub (egui), no mesmo estilo do AbyssSub.
+
+mod anim;
+mod atualizacao;
+mod desenho;
+mod imagens;
+mod leaderboard;
+mod telas;
+mod tema;
+
+use std::collections::HashMap;
+use std::sync::mpsc::{self, TryRecvError};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::{Datelike, Days, Local, TimeZone};
+use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
+
+use crate::dados::Dados;
+use crate::plataforma::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma};
+use crate::ranking::{ItemRanking, ModoRanking, PeriodoRanking};
+use crate::sessoes::{self, Sessao, MIN_SESSAO_MS};
+
+use anim::Animador;
+use tema::Paleta;
+
+pub(crate) const DIA_MS: i64 = 86_400_000;
+pub(crate) const VERSAO: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Periodo {
+    Hoje,
+    Semana,
+    Mes,
+    Tudo,
+}
+
+impl Periodo {
+    pub const NOMES: [&'static str; 4] = ["Hoje", "7 dias", "30 dias", "Tudo"];
+
+    pub fn indice(self) -> usize {
+        self as usize
+    }
+
+    pub fn de(i: usize) -> Periodo {
+        match i {
+            0 => Periodo::Hoje,
+            1 => Periodo::Semana,
+            2 => Periodo::Mes,
+            _ => Periodo::Tudo,
+        }
+    }
+
+    pub fn nome(self) -> &'static str {
+        Self::NOMES[self.indice()]
+    }
+
+    pub fn inicio(self) -> i64 {
+        match self {
+            Periodo::Hoje => inicio_do_dia(0),
+            Periodo::Semana => inicio_do_dia(6),
+            Periodo::Mes => inicio_do_dia(29),
+            Periodo::Tudo => 0,
+        }
+    }
+
+    pub fn dias(self) -> i64 {
+        match self {
+            Periodo::Hoje => 1,
+            Periodo::Semana => 7,
+            Periodo::Mes => 30,
+            Periodo::Tudo => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Aba {
+    Inicio,
+    Jogos,
+    Leaderboard,
+    Historico,
+}
+
+impl Aba {
+    fn indice(self) -> i32 {
+        match self {
+            Aba::Inicio => 0,
+            Aba::Jogos => 1,
+            Aba::Leaderboard => 2,
+            Aba::Historico => 3,
+        }
+    }
+}
+
+enum Msg {
+    Pronto {
+        apps: Option<Vec<InfoApp>>,
+        fechadas: Vec<Sessao>,
+        aberta: Option<(String, i64)>,
+        ate: i64,
+    },
+    Erro(String),
+}
+
+pub(crate) struct Linha {
+    pub pacote: String,
+    pub tempo: i64,
+    pub ultima: i64,
+    pub sessoes: usize,
+}
+
+pub struct AbyssHubApp {
+    plat: Arc<dyn Plataforma>,
+    proprio: String,
+    dados: Dados,
+    apps: HashMap<String, InfoApp>,
+
+    periodo: Periodo,
+    aba: Aba,
+    detalhe: Option<String>,
+    ajustes_aberto: bool,
+    dia_sel: Option<usize>,
+
+    permissao: bool,
+    ultimo_check: Instant,
+    rx: Option<mpsc::Receiver<Msg>>,
+    ultima_sync: Option<Instant>,
+    precisa_apps: bool,
+    sync_manual: bool,
+    aberta: Option<(String, i64)>,
+    toast: Option<(String, f64, bool)>,
+
+    // aparência
+    an: Animador,
+    p: Paleta,
+    escuro: f32,
+    estilo_aplicado: f32,
+    escuro_sistema: Option<bool>,
+    ultimo_check_tema: Option<Instant>,
+    margens: Option<(f32, f32)>,
+    ultimo_check_margens: Option<Instant>,
+    logo: Option<TextureHandle>,
+
+    // animação de entrada das telas
+    boot: Option<f64>,
+    inicio_pagina: f64,
+    inicio_dados: f64,
+    direcao: f32,
+
+    // conta e Leaderboard
+    imagens: imagens::Imagens,
+    conta: Conta,
+    ultimo_check_conta: Option<Instant>,
+    lb_modo: ModoRanking,
+    lb_periodo: PeriodoRanking,
+    lb_jogo: Option<String>,
+    /// resultados por consulta (modo/período/jogo) e quando chegaram
+    lb_cache: HashMap<String, (Vec<ItemRanking>, Instant)>,
+    lb_rx: Option<mpsc::Receiver<leaderboard::Resposta>>,
+    lb_pedido: Option<(String, Instant)>,
+    lb_erro: Option<String>,
+    ultima_publicacao: Option<(String, Instant)>,
+    rx_apagar: Option<mpsc::Receiver<Result<(), String>>>,
+
+    // atualização automática
+    rx_upd: Option<mpsc::Receiver<Result<Option<crate::atualizacao::Versao>, String>>>,
+    upd_manual: bool,
+    upd_tentou: bool,
+    upd_aberto: bool,
+    upd_baixa: crate::atualizacao::Baixa,
+    ultimo_poll_upd: Option<Instant>,
+}
+
+impl AbyssHubApp {
+    pub fn novo(cc: &eframe::CreationContext<'_>, plat: Arc<dyn Plataforma>) -> Self {
+        tema::instalar_fontes(&cc.egui_ctx);
+        let dados = Dados::carregar(&plat.pasta_dados());
+        let permissao = plat.tem_permissao();
+
+        let bytes = include_bytes!("../assets/logo_128.rgba");
+        let logo = cc.egui_ctx.load_texture(
+            "logo",
+            ColorImage::from_rgba_unmultiplied([128, 128], bytes),
+            TextureOptions::LINEAR,
+        );
+
+        let plat_img = plat.clone();
+        let pasta_img = plat.pasta_dados().join("imagens");
+        AbyssHubApp {
+            proprio: plat.pacote_proprio(),
+            plat,
+            dados,
+            apps: HashMap::new(),
+            periodo: Periodo::Semana,
+            aba: Aba::Inicio,
+            detalhe: None,
+            ajustes_aberto: false,
+            dia_sel: None,
+            permissao,
+            ultimo_check: Instant::now(),
+            rx: None,
+            ultima_sync: None,
+            precisa_apps: true,
+            sync_manual: false,
+            aberta: None,
+            toast: None,
+            an: Animador::default(),
+            p: tema::ESCURO,
+            escuro: 1.0,
+            estilo_aplicado: -1.0,
+            escuro_sistema: None,
+            ultimo_check_tema: None,
+            margens: None,
+            ultimo_check_margens: None,
+            logo: Some(logo),
+            boot: None,
+            inicio_pagina: 0.0,
+            inicio_dados: 0.0,
+            direcao: 0.0,
+            imagens: imagens::Imagens::nova(plat_img, pasta_img),
+            conta: Conta::default(),
+            ultimo_check_conta: None,
+            lb_modo: ModoRanking::Pessoas,
+            lb_periodo: PeriodoRanking::Semana,
+            lb_jogo: None,
+            lb_cache: HashMap::new(),
+            lb_rx: None,
+            lb_pedido: None,
+            lb_erro: None,
+            ultima_publicacao: None,
+            rx_apagar: None,
+            rx_upd: None,
+            upd_manual: false,
+            upd_tentou: false,
+            upd_aberto: false,
+            upd_baixa: Default::default(),
+            ultimo_poll_upd: None,
+        }
+    }
+
+    // ---------- Navegação ----------
+
+    fn trocar_pagina(&mut self, direcao: f32) {
+        self.inicio_pagina = self.an.agora;
+        self.inicio_dados = self.an.agora;
+        self.direcao = direcao;
+        self.dia_sel = None;
+        // o número grande do topo volta a "contar" quando a tela muda
+        self.an.esquecer_prefixo("total:");
+    }
+
+    pub(crate) fn ir_para_aba(&mut self, aba: Aba) {
+        if self.detalhe.is_some() {
+            self.detalhe = None;
+            self.aba = aba;
+            self.trocar_pagina(-1.0);
+        } else if self.aba != aba {
+            let dir = (aba.indice() - self.aba.indice()).signum() as f32;
+            self.aba = aba;
+            self.trocar_pagina(dir);
+        }
+    }
+
+    pub(crate) fn abrir_detalhe(&mut self, pacote: &str) {
+        self.detalhe = Some(pacote.to_string());
+        self.trocar_pagina(1.0);
+    }
+
+    pub(crate) fn fechar_detalhe(&mut self) {
+        self.detalhe = None;
+        self.trocar_pagina(-1.0);
+    }
+
+    pub(crate) fn mudar_periodo(&mut self, p: Periodo) {
+        if self.periodo != p {
+            self.periodo = p;
+            self.inicio_dados = self.an.agora;
+            self.dia_sel = None;
+        }
+    }
+
+    pub(crate) fn mostrar_toast(&mut self, texto: impl Into<String>, erro: bool) {
+        self.toast = Some((texto.into(), self.an.agora, erro));
+    }
+
+    // ---------- Sincronização (numa thread separada) ----------
+
+    pub(crate) fn sincronizar(&mut self) {
+        if self.rx.is_some() {
+            return;
+        }
+        self.ultima_sync = Some(Instant::now());
+        let plat = self.plat.clone();
+        let agora = agora_ms();
+        let desde = if self.dados.sincronizado_ate > 0 {
+            self.dados.sincronizado_ate - 1_000
+        } else {
+            agora - 30 * DIA_MS
+        };
+        let com_apps = self.precisa_apps || self.apps.is_empty();
+        self.precisa_apps = false;
+
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let r = (|| -> Result<Msg, String> {
+                let apps = if com_apps { Some(plat.listar_apps()?) } else { None };
+                let evs = plat.eventos(desde, agora)?;
+                let res = sessoes::montar_sessoes(&evs);
+                Ok(Msg::Pronto {
+                    apps,
+                    fechadas: res.fechadas,
+                    aberta: res.aberta,
+                    ate: agora,
+                })
+            })();
+            let _ = tx.send(r.unwrap_or_else(Msg::Erro));
+        });
+    }
+
+    fn receber(&mut self) {
+        let Some(rx) = &self.rx else { return };
+        match rx.try_recv() {
+            Ok(Msg::Pronto {
+                apps,
+                fechadas,
+                aberta,
+                ate,
+            }) => {
+                self.rx = None;
+                if let Some(apps) = apps {
+                    for a in &apps {
+                        if a.jogo {
+                            self.dados.auto_jogo.insert(a.pacote.clone());
+                        }
+                    }
+                    self.apps = apps.into_iter().map(|a| (a.pacote.clone(), a)).collect();
+                }
+                let mut novas = 0;
+                for s in fechadas {
+                    if s.pacote == self.proprio || s.duracao() < MIN_SESSAO_MS {
+                        continue;
+                    }
+                    if let Some(a) = self.apps.get(&s.pacote) {
+                        self.dados.nomes.insert(s.pacote.clone(), a.nome.clone());
+                    }
+                    sessoes::mesclar(&mut self.dados.sessoes, s);
+                    novas += 1;
+                }
+                self.dados.sincronizado_ate = aberta.as_ref().map(|a| a.1).unwrap_or(ate);
+                self.aberta = aberta.filter(|a| a.0 != self.proprio);
+                self.salvar();
+                if self.sync_manual {
+                    self.sync_manual = false;
+                    let msg = if novas == 0 {
+                        "Tudo em dia".to_string()
+                    } else {
+                        format!("Atualizado · {novas} {}", if novas == 1 { "sessão" } else { "sessões" })
+                    };
+                    self.mostrar_toast(msg, false);
+                    self.inicio_dados = self.an.agora;
+                }
+            }
+            Ok(Msg::Erro(e)) => {
+                self.rx = None;
+                self.sync_manual = false;
+                self.mostrar_toast(e, true);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.rx = None;
+                self.sync_manual = false;
+                self.mostrar_toast("A atualização parou no meio", true);
+            }
+        }
+    }
+
+    pub(crate) fn salvar(&mut self) {
+        if let Err(e) = self.dados.salvar(&self.plat.pasta_dados()) {
+            self.mostrar_toast(format!("Não consegui salvar: {e}"), true);
+        }
+    }
+
+    // ---------- Consultas ----------
+
+    pub(crate) fn nome(&self, pacote: &str) -> String {
+        self.apps
+            .get(pacote)
+            .map(|a| a.nome.clone())
+            .or_else(|| self.dados.nomes.get(pacote).cloned())
+            .unwrap_or_else(|| pacote.to_string())
+    }
+
+    pub(crate) fn visivel(&self, pacote: &str) -> bool {
+        pacote != self.proprio && (self.dados.mostrar_todos || self.dados.eh_jogo(pacote))
+    }
+
+    /// Todas as sessões que aparecem na tela (inclui a que está aberta agora).
+    pub(crate) fn sessoes_visiveis(&self) -> Vec<Sessao> {
+        let mut v: Vec<Sessao> = self
+            .dados
+            .sessoes
+            .iter()
+            .filter(|s| self.visivel(&s.pacote))
+            .cloned()
+            .collect();
+        if let Some((p, ini)) = &self.aberta {
+            if self.visivel(p) {
+                v.push(Sessao {
+                    pacote: p.clone(),
+                    inicio: *ini,
+                    fim: agora_ms(),
+                });
+            }
+        }
+        v
+    }
+
+    pub(crate) fn sessoes_de(&self, pacote: &str) -> Vec<Sessao> {
+        let mut v: Vec<Sessao> = self
+            .dados
+            .sessoes
+            .iter()
+            .filter(|s| s.pacote == pacote)
+            .cloned()
+            .collect();
+        if let Some((p, ini)) = &self.aberta {
+            if p == pacote {
+                v.push(Sessao {
+                    pacote: p.clone(),
+                    inicio: *ini,
+                    fim: agora_ms(),
+                });
+            }
+        }
+        v
+    }
+
+    pub(crate) fn totais(&self, inicio: i64, fim: i64) -> Vec<Linha> {
+        let mut m: HashMap<String, Linha> = HashMap::new();
+        for s in self.sessoes_visiveis() {
+            let t = sessoes::tempo_no_intervalo(&s, inicio, fim);
+            let e = m.entry(s.pacote.clone()).or_insert(Linha {
+                pacote: s.pacote.clone(),
+                tempo: 0,
+                ultima: 0,
+                sessoes: 0,
+            });
+            e.tempo += t;
+            e.ultima = e.ultima.max(s.fim);
+            if t > 0 {
+                e.sessoes += 1;
+            }
+        }
+        let mut v: Vec<Linha> = m.into_values().filter(|l| l.tempo > 0).collect();
+        v.sort_by(|a, b| b.tempo.cmp(&a.tempo));
+        v
+    }
+
+    /// Tempo por dia nos últimos 7 dias: (início do dia, tempo, nº de jogos).
+    pub(crate) fn por_dia(sess: &[Sessao]) -> Vec<(i64, i64, usize)> {
+        let agora = agora_ms();
+        (0..7)
+            .rev()
+            .map(|d| {
+                let ini = inicio_do_dia(d);
+                let fim = if d == 0 { agora } else { inicio_do_dia(d - 1) };
+                let mut jogos = std::collections::BTreeSet::new();
+                let mut total = 0;
+                for s in sess {
+                    let t = sessoes::tempo_no_intervalo(s, ini, fim);
+                    if t > 0 {
+                        total += t;
+                        jogos.insert(s.pacote.as_str());
+                    }
+                }
+                (ini, total, jogos.len())
+            })
+            .collect()
+    }
+
+    // ---------- Coisas do sistema (tema, barras) ----------
+
+    fn checar_sistema(&mut self, ctx: &egui::Context) {
+        let vencido = |t: Option<Instant>, ms: u64| t.map_or(true, |t| t.elapsed() > Duration::from_millis(ms));
+
+        // conta: mais rápido enquanto está entrando
+        let intervalo = if self.conta.estado == EstadoConta::Entrando {
+            400
+        } else {
+            1500
+        };
+        if vencido(self.ultimo_check_conta, intervalo) {
+            let nova = self.plat.conta();
+            if nova.estado == EstadoConta::Logado && self.conta.estado != EstadoConta::Logado {
+                self.ultima_publicacao = None; // publica logo que entra
+                if self.conta.estado == EstadoConta::Entrando {
+                    self.mostrar_toast(format!("Olá, {}!", nova.nome.split(' ').next().unwrap_or("")), false);
+                }
+            }
+            if nova.estado == EstadoConta::Erro && self.conta.estado == EstadoConta::Entrando {
+                self.mostrar_toast(nova.msg.clone(), true);
+            }
+            self.conta = nova;
+            self.ultimo_check_conta = Some(Instant::now());
+        }
+        if let Some(rx) = &self.rx_apagar {
+            if let Ok(r) = rx.try_recv() {
+                self.rx_apagar = None;
+                self.ultimo_check_conta = None;
+                self.lb_cache.clear();
+                match r {
+                    Ok(()) => self.mostrar_toast("Seus dados saíram do Leaderboard", false),
+                    Err(e) => self.mostrar_toast(format!("Não consegui apagar: {e}"), true),
+                }
+            }
+        }
+        if self.imagens.receber(ctx) {
+            self.an.ativo = true;
+        }
+
+        if !self.permissao && self.ultimo_check.elapsed() > Duration::from_millis(1500) {
+            self.permissao = self.plat.tem_permissao();
+            self.ultimo_check = Instant::now();
+            if self.permissao {
+                self.trocar_pagina(0.0);
+            }
+        }
+        if vencido(self.ultimo_check_tema, 2000) {
+            self.escuro_sistema = self.plat.tema_escuro_sistema();
+            self.ultimo_check_tema = Some(Instant::now());
+        }
+        if self.margens.is_none() || vencido(self.ultimo_check_margens, 3000) {
+            if let Some(m) = self.plat.margens_sistema() {
+                self.margens = Some(m);
+            }
+            self.ultimo_check_margens = Some(Instant::now());
+        }
+
+        let escuro_alvo = match self.dados.tema {
+            1 => false,
+            2 => true,
+            _ => self
+                .escuro_sistema
+                .or_else(|| ctx.system_theme().map(|t| t == egui::Theme::Dark))
+                .unwrap_or(true),
+        };
+        self.escuro = self.an.ir("tema", if escuro_alvo { 1.0 } else { 0.0 }, 0.4);
+        self.p = Paleta::misturar(self.escuro);
+        if (self.escuro - self.estilo_aplicado).abs() > 0.002 {
+            tema::aplicar_estilo(ctx, &self.p, self.escuro > 0.5);
+            self.estilo_aplicado = self.escuro;
+        }
+    }
+}
+
+impl eframe::App for AbyssHubApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let agora = ctx.input(|i| i.time);
+        self.an.quadro(agora);
+        self.an.desligado = !self.dados.animacoes;
+        if self.boot.is_none() {
+            self.boot = Some(agora);
+            self.inicio_pagina = agora;
+            self.inicio_dados = agora;
+        }
+
+        self.receber();
+        self.checar_sistema(ctx);
+
+        // Tecla Esc (no PC): fecha o painel ou o detalhe.
+        let voltar = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if voltar {
+            if self.upd_aberto && self.upd_baixa.estado != "baixando" {
+                self.upd_aberto = false;
+            } else if self.ajustes_aberto {
+                self.ajustes_aberto = false;
+            } else if self.detalhe.is_some() {
+                self.fechar_detalhe();
+            }
+        }
+
+        if self.permissao
+            && self.rx.is_none()
+            && self.ultima_sync.map_or(true, |t| t.elapsed() > Duration::from_secs(30))
+        {
+            self.sincronizar();
+        }
+        if self.permissao {
+            self.cuidar_leaderboard();
+        }
+        self.cuidar_atualizacao();
+
+        let ppp = ctx.pixels_per_point().max(0.5);
+        let (topo_px, baixo_px) = self.margens.unwrap_or((0.0, 0.0));
+        let (topo, baixo) = (topo_px / ppp, baixo_px / ppp);
+
+        if self.permissao {
+            egui::TopBottomPanel::bottom("abas")
+                .frame(egui::Frame::default().fill(self.p.card))
+                .show_separator_line(false)
+                .exact_height(66.0 + baixo)
+                .show(ctx, |ui| self.barra_abas(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(self.p.bg))
+            .show(ctx, |ui| self.pagina(ui, topo));
+        if self.permissao {
+            self.botao_flutuante(ctx, baixo);
+        }
+        self.folha_ajustes(ctx, topo);
+        self.folha_atualizacao(ctx);
+        self.desenhar_toast(ctx, baixo);
+
+        if self.an.ativo || self.rx.is_some() {
+            ctx.request_repaint();
+        } else if self.dados.animacoes {
+            // O brilho do topo se mexe devagar: ~20 quadros por segundo bastam e poupam bateria.
+            ctx.request_repaint_after(Duration::from_millis(50));
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+}
+
+// ---------- Datas e durações ----------
+
+const DIAS_SEMANA: [&str; 7] = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
+const MESES: [&str; 12] = [
+    "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
+];
+
+/// Meia-noite (horário local) de `dias_atras` dias atrás, em ms.
+pub(crate) fn inicio_do_dia(dias_atras: i64) -> i64 {
+    let hoje = Local::now().date_naive();
+    let dia = if dias_atras >= 0 {
+        hoje.checked_sub_days(Days::new(dias_atras as u64))
+    } else {
+        hoje.checked_add_days(Days::new((-dias_atras) as u64))
+    }
+    .unwrap_or(hoje);
+    dia.and_hms_opt(0, 0, 0)
+        .and_then(|d| d.and_local_timezone(Local).earliest())
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0)
+}
+
+pub(crate) fn fmt_duracao(ms: i64) -> String {
+    let s = (ms / 1000).max(0);
+    let (h, m) = (s / 3600, (s % 3600) / 60);
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m")
+    } else {
+        format!("{s}s")
+    }
+}
+
+pub(crate) fn fmt_curto(ms: i64) -> String {
+    let m = ms / 60_000;
+    if m >= 60 {
+        let h = m as f64 / 60.0;
+        if h >= 10.0 {
+            format!("{h:.0}h")
+        } else {
+            format!("{h:.1}h").replace('.', ",")
+        }
+    } else {
+        format!("{m}m")
+    }
+}
+
+pub(crate) fn fmt_hora(ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| d.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+pub(crate) fn fmt_dia_curto(ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| d.format("%d").to_string())
+        .unwrap_or_default()
+}
+
+/// "hoje", "ontem" ou "sex, 14 de nov".
+pub(crate) fn fmt_dia(ms: i64) -> String {
+    if ms >= inicio_do_dia(0) {
+        return "Hoje".into();
+    }
+    if ms >= inicio_do_dia(1) {
+        return "Ontem".into();
+    }
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| {
+            let sem = DIAS_SEMANA[d.weekday().num_days_from_monday() as usize];
+            let mes = MESES[d.month0() as usize];
+            let mut s = format!("{sem}, {} de {mes}", d.day());
+            if let Some(c) = s.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            s
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn fmt_relativo(ms: i64) -> String {
+    if ms <= 0 {
+        return "-".into();
+    }
+    let min = (agora_ms() - ms) / 60_000;
+    if min < 1 {
+        "agora".into()
+    } else if min < 60 {
+        format!("há {min} min")
+    } else if min < 60 * 24 {
+        format!("há {} h", min / 60)
+    } else if min < 60 * 24 * 2 {
+        "ontem".into()
+    } else {
+        format!("há {} dias", min / (60 * 24))
+    }
+}
+
+pub(crate) fn cor_categoria(i: usize) -> Color32 {
+    // As mesmas cores das categorias do AbyssSub.
+    const CORES: [Color32; 7] = [
+        Color32::from_rgb(0x2f, 0x80, 0xed),
+        Color32::from_rgb(0x34, 0xa8, 0x53),
+        Color32::from_rgb(0x7b, 0x4b, 0xe6),
+        Color32::from_rgb(0xe8, 0x59, 0x0c),
+        Color32::from_rgb(0xb4, 0x3f, 0xd1),
+        Color32::from_rgb(0xe8, 0x4a, 0x8a),
+        Color32::from_rgb(0xe3, 0xad, 0x58),
+    ];
+    CORES[i % CORES.len()]
+}

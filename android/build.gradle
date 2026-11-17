@@ -1,0 +1,14 @@
+plugins {
+    id 'com.android.application' version '8.13.0' apply false
+    id 'com.google.gms.google-services' version '4.4.2' apply false
+}
+
+// Igual ao AbyssSub: os arquivos temporários do build ficam FORA do OneDrive
+// (o OneDrive trava essas pastas e o build falha). Local: %LOCALAPPDATA%\AbyssHub-build
+def localAppData = System.getenv('LOCALAPPDATA')
+if (localAppData) {
+    def outBase = new File(localAppData, 'AbyssHub-build')
+    allprojects {
+        layout.buildDirectory.set(new File(outBase, project.name))
+    }
+}

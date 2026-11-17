@@ -1,0 +1,46 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "abysshub_pessoas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dia", "order": "ASCENDING" },
+        { "fieldPath": "hoje_ms", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "abysshub_pares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dia", "order": "ASCENDING" },
+        { "fieldPath": "hoje_ms", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "abysshub_pares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "semana_ms", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "abysshub_pares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "tudo_ms", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "abysshub_pares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "dia", "order": "ASCENDING" },
+        { "fieldPath": "hoje_ms", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
