@@ -245,6 +245,16 @@ pub fn aplicar_estilo(ctx: &egui::Context, p: &Paleta, escuro: bool) {
         .into();
         s.spacing.item_spacing = vec2(10.0, 10.0);
         s.spacing.button_padding = vec2(14.0, 10.0);
+        // Barra de rolagem mais grossa, fácil de pegar com o dedo.
+        s.spacing.scroll = egui::style::ScrollStyle {
+            bar_width: 16.0,
+            floating_width: 7.0,
+            handle_min_length: 56.0,
+            dormant_handle_opacity: 0.45,
+            active_handle_opacity: 0.8,
+            interact_handle_opacity: 1.0,
+            ..egui::style::ScrollStyle::floating()
+        };
         // No celular, segurar um texto não deve "roubar" o toque do cartão.
         s.interaction.selectable_labels = false;
         s.animation_time = 0.25;

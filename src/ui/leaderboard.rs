@@ -55,36 +55,50 @@ impl AbyssHubApp {
     }
 
     /// Jogos para escolher no modo "Por jogo": os seus primeiro, depois os que aparecem no ranking.
-    pub(super) fn jogos_para_escolher(&self) -> Vec<(String, String)> {
-        let mut v: Vec<(String, String)> = self
-            .totais(0, agora_ms())
-            .into_iter()
-            .filter(|l| self.dados.eh_jogo(&l.pacote))
-            .map(|l| (l.pacote.clone(), self.nome(&l.pacote)))
-            .collect();
+    /// Cada item: (chave do jogo, pacote para o ícone, nome).
+    pub(super) fn jogos_para_escolher(&self) -> Vec<(String, String, String)> {
+        let mut v: Vec<(String, String, String)> = Vec::new();
+        for l in self.totais(0, agora_ms()) {
+            if !self.eh_jogo(&l.pacote) {
+                continue;
+            }
+            let nome = self.nome(&l.pacote);
+            let chave = ranking::chave_jogo(&nome, &l.pacote);
+            if !v.iter().any(|(c, _, _)| *c == chave) {
+                v.push((chave, l.pacote.clone(), nome));
+            }
+        }
         for (itens, _) in self.lb_cache.values() {
             for i in itens {
-                if !i.pacote.is_empty() && !v.iter().any(|(p, _)| *p == i.pacote) {
-                    v.push((i.pacote.clone(), i.jogo.clone()));
+                if !i.chave.is_empty() && !v.iter().any(|(c, _, _)| *c == i.chave) {
+                    v.push((i.chave.clone(), i.pacote.clone(), i.jogo.clone()));
                 }
             }
         }
         v
     }
 
-    /// O JSON com o seu tempo (só o que conta como jogo).
+    /// O JSON com o seu tempo (só o que conta como jogo, com os repetidos juntados).
     fn json_publicacao(&self) -> String {
         let mut sess: Vec<Sessao> = self
             .dados
             .sessoes
             .iter()
-            .filter(|s| s.pacote != self.proprio && self.dados.eh_jogo(&s.pacote))
-            .cloned()
+            .filter(|s| {
+                let c = self.canonico(&s.pacote);
+                c != self.proprio && self.eh_jogo(c)
+            })
+            .map(|s| Sessao {
+                pacote: self.canonico(&s.pacote).to_string(),
+                inicio: s.inicio,
+                fim: s.fim,
+            })
             .collect();
         if let Some((p, ini)) = &self.aberta {
-            if p != &self.proprio && self.dados.eh_jogo(p) {
+            let c = self.canonico(p);
+            if c != self.proprio && self.eh_jogo(c) {
                 sess.push(Sessao {
-                    pacote: p.clone(),
+                    pacote: c.to_string(),
                     inicio: *ini,
                     fim: agora_ms(),
                 });
@@ -475,9 +489,9 @@ impl AbyssHubApp {
         egui::ScrollArea::horizontal().id_salt("lb_jogos").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                for (pacote, nome) in &jogos {
-                    let sel = self.lb_jogo.as_deref() == Some(pacote.as_str());
-                    let t = self.an.ir(&format!("lbj:{pacote}"), if sel { 1.0 } else { 0.0 }, 0.25);
+                for (chave, pacote, nome) in &jogos {
+                    let sel = self.lb_jogo.as_deref() == Some(chave.as_str());
+                    let t = self.an.ir(&format!("lbj:{chave}"), if sel { 1.0 } else { 0.0 }, 0.25);
                     let nome_curto: String = nome.chars().take(18).collect();
                     let g = ui.painter().layout_no_wrap(nome_curto, fonte(13.5, Peso::Semi), p.text);
                     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 50.0, 40.0), Sense::click());
@@ -495,7 +509,7 @@ impl AbyssHubApp {
                         misturar_cor(p.text, p.chip_on_ink, t),
                     );
                     if resp.clicked() && !sel {
-                        self.lb_jogo = Some(pacote.clone());
+                        self.lb_jogo = Some(chave.clone());
                         self.inicio_dados = self.an.agora;
                     }
                 }

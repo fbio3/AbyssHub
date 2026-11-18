@@ -19,13 +19,28 @@ service cloud.firestore {
       allow delete: if request.auth != null && request.auth.uid == uid;
     }
 
-    // Um documento por pessoa + jogo: "{uid}__{pacote do jogo}"
+    // Um documento por pessoa + jogo: "{uid}__{chave do jogo}" (a chave é o nome do jogo,
+    // para o mesmo jogo de lojas diferentes contar como um só)
     match /abysshub_pares/{id} {
       allow read: if request.auth != null;
       allow create, update: if request.auth != null
                             && request.resource.data.uid == request.auth.uid
-                            && id == request.auth.uid + '__' + request.resource.data.pacote;
+                            && id == request.auth.uid + '__' + request.resource.data.chave;
       allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    // Nome e foto escolhidos para o Leaderboard
+    match /abysshub_perfis/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Foto escolhida da galeria (JPEG pequeno em texto)
+    match /abysshub_fotos/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && (request.resource == null
+                       || (request.resource.data.jpg is string && request.resource.data.jpg.size() < 300000));
     }
 
     // Ícones dos jogos (para quem não tem o jogo instalado ver). Só cria, não troca.

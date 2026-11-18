@@ -88,10 +88,31 @@ pub struct ItemRanking {
     pub pacote: String,
     #[serde(default)]
     pub jogo: String,
+    /// Chave do jogo pelo nome (ver `chave_jogo`).
+    #[serde(default)]
+    pub chave: String,
     #[serde(default)]
     pub ms: i64,
     #[serde(default)]
     pub atualizado_ms: i64,
+}
+
+/// Chave de um jogo pelo nome, para juntar o mesmo jogo instalado de lojas diferentes
+/// (ex.: Roblox da Play Store e da Galaxy Store). "Roblox" -> "roblox".
+pub fn chave_jogo(nome: &str, pacote: &str) -> String {
+    let k: String = nome
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    if k.is_empty() {
+        pacote
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect()
+    } else {
+        k
+    }
 }
 
 pub fn ler_itens(json: &str) -> Result<Vec<ItemRanking>, String> {
@@ -108,6 +129,7 @@ struct Top {
 struct JogoPub {
     pacote: String,
     nome: String,
+    chave: String,
     hoje_ms: i64,
     semana_ms: i64,
     tudo_ms: i64,
@@ -143,12 +165,16 @@ pub fn montar_publicacao(
     }
     let mut jogos: Vec<JogoPub> = por_jogo
         .into_iter()
-        .map(|(p, t)| JogoPub {
-            pacote: p.to_string(),
-            nome: nome(p),
-            hoje_ms: t[0],
-            semana_ms: t[1],
-            tudo_ms: t[2],
+        .map(|(p, t)| {
+            let n = nome(p);
+            JogoPub {
+                chave: chave_jogo(&n, p),
+                pacote: p.to_string(),
+                nome: n,
+                hoje_ms: t[0],
+                semana_ms: t[1],
+                tudo_ms: t[2],
+            }
         })
         .collect();
     jogos.sort_by(|a, b| b.tudo_ms.cmp(&a.tudo_ms).then(a.pacote.cmp(&b.pacote)));
@@ -197,6 +223,15 @@ mod testes {
         assert_eq!(v["hoje_ms"], 4000);
         assert_eq!(v["top_tudo"]["pacote"], "b");
         assert_eq!(v["top_hoje"]["nome"], "B");
+        assert_eq!(v["jogos"][0]["chave"], "b");
+    }
+
+    #[test]
+    fn chave_pelo_nome() {
+        assert_eq!(chave_jogo("Roblox", "com.roblox.client"), "roblox");
+        assert_eq!(chave_jogo(" ROBLOX ", "x"), "roblox");
+        assert_eq!(chave_jogo("Pokémon GO", "x"), "pokémongo");
+        assert_eq!(chave_jogo("", "com.a.b"), "com_a_b");
     }
 
     #[test]

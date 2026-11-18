@@ -452,6 +452,22 @@ impl Plataforma for PlataformaAndroid {
         self.estatico_void("entrarComEmail");
     }
 
+    fn editar_nome(&self) {
+        self.estatico_void("editarNome");
+    }
+
+    fn editar_foto(&self) {
+        self.estatico_void("editarFoto");
+    }
+
+    fn ligar_google(&self) {
+        self.estatico_void("ligarGoogle");
+    }
+
+    fn ligar_email(&self) {
+        self.estatico_void("ligarEmail");
+    }
+
     fn verificar_atualizacao(&self, repo: &str) -> Result<Option<String>, String> {
         let r = self.com_env(|env, act| {
             let classe = env.get_object_class(act)?;

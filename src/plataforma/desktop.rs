@@ -19,14 +19,15 @@ const DIA: i64 = 86_400_000;
 
 pub struct PlataformaDesktop {
     pasta: PathBuf,
-    logado: Mutex<bool>,
+    /// formas de entrar da conta de teste (vazio = não está logado)
+    logado: Mutex<Vec<String>>,
 }
 
 impl PlataformaDesktop {
     pub fn nova() -> Self {
         PlataformaDesktop {
             pasta: PathBuf::from("dados-teste"),
-            logado: Mutex::new(false),
+            logado: Mutex::new(Vec::new()),
         }
     }
 }
@@ -101,13 +102,16 @@ impl Plataforma for PlataformaDesktop {
     // ---------- Leaderboard de mentirinha (para testar a tela no PC) ----------
 
     fn conta(&self) -> Conta {
-        if *self.logado.lock().unwrap() {
+        let provedores = self.logado.lock().unwrap().clone();
+        if !provedores.is_empty() {
             Conta {
                 estado: EstadoConta::Logado,
                 msg: String::new(),
                 uid: "eu".into(),
                 nome: "Você (teste)".into(),
                 foto: String::new(),
+                email: "teste@exemplo.com".into(),
+                provedores,
             }
         } else {
             Conta {
@@ -118,15 +122,29 @@ impl Plataforma for PlataformaDesktop {
     }
 
     fn entrar(&self) {
-        *self.logado.lock().unwrap() = true;
+        *self.logado.lock().unwrap() = vec!["google.com".into()];
     }
 
     fn sair(&self) {
-        *self.logado.lock().unwrap() = false;
+        self.logado.lock().unwrap().clear();
     }
 
     fn entrar_email(&self) {
-        *self.logado.lock().unwrap() = true;
+        *self.logado.lock().unwrap() = vec!["password".into()];
+    }
+
+    fn ligar_google(&self) {
+        let mut p = self.logado.lock().unwrap();
+        if !p.is_empty() && !p.iter().any(|x| x == "google.com") {
+            p.push("google.com".into());
+        }
+    }
+
+    fn ligar_email(&self) {
+        let mut p = self.logado.lock().unwrap();
+        if !p.is_empty() && !p.iter().any(|x| x == "password") {
+            p.push("password".into());
+        }
     }
 
     fn publicar(&self, _json: &str) -> Result<(), String> {
@@ -162,7 +180,7 @@ impl Plataforma for PlataformaDesktop {
                 "pares" => vec![i % 4, (i + 1) % 4],
                 "jogo" => APPS
                     .iter()
-                    .position(|a| a.0 == pacote)
+                    .position(|a| crate::ranking::chave_jogo(a.1, a.0) == pacote)
                     .map(|p| vec![p])
                     .unwrap_or_default(),
                 _ => vec![i % 4],
@@ -173,6 +191,7 @@ impl Plataforma for PlataformaDesktop {
                 itens.push(serde_json::json!({
                     "uid": uid, "nome": nome, "foto": "",
                     "pacote": APPS[j].0, "jogo": APPS[j].1,
+                    "chave": crate::ranking::chave_jogo(APPS[j].1, APPS[j].0),
                     "ms": ms, "atualizado_ms": agora_ms() - (i as i64) * 90_000,
                 }));
             }

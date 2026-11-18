@@ -5,6 +5,7 @@ mod atualizacao;
 mod desenho;
 mod imagens;
 mod leaderboard;
+mod rolagem;
 mod telas;
 mod tema;
 
@@ -120,6 +121,8 @@ pub struct AbyssHubApp {
     aba: Aba,
     detalhe: Option<String>,
     ajustes_aberto: bool,
+    /// nas configurações, mostrar a lista inteira de apps (e não só os 10 primeiros)
+    ajustes_todos_apps: bool,
     dia_sel: Option<usize>,
 
     permissao: bool,
@@ -170,6 +173,14 @@ pub struct AbyssHubApp {
     upd_aberto: bool,
     upd_baixa: crate::atualizacao::Baixa,
     ultimo_poll_upd: Option<Instant>,
+
+    /// posição e velocidade da rolagem de cada tela
+    rolagens: HashMap<String, rolagem::Rolagem>,
+
+    /// Mesmo jogo instalado de lojas diferentes (ex.: Roblox da Play Store e da Galaxy Store):
+    /// pacote -> pacote "principal", e principal -> todos os pacotes dele.
+    canon: HashMap<String, String>,
+    apelidos: HashMap<String, Vec<String>>,
 }
 
 impl AbyssHubApp {
@@ -187,7 +198,7 @@ impl AbyssHubApp {
 
         let plat_img = plat.clone();
         let pasta_img = plat.pasta_dados().join("imagens");
-        AbyssHubApp {
+        let mut app = AbyssHubApp {
             proprio: plat.pacote_proprio(),
             plat,
             dados,
@@ -196,6 +207,7 @@ impl AbyssHubApp {
             aba: Aba::Inicio,
             detalhe: None,
             ajustes_aberto: false,
+            ajustes_todos_apps: false,
             dia_sel: None,
             permissao,
             ultimo_check: Instant::now(),
@@ -236,7 +248,12 @@ impl AbyssHubApp {
             upd_aberto: false,
             upd_baixa: Default::default(),
             ultimo_poll_upd: None,
-        }
+            rolagens: HashMap::new(),
+            canon: HashMap::new(),
+            apelidos: HashMap::new(),
+        };
+        app.recalcular_jogos_iguais();
+        app
     }
 
     // ---------- Navegação ----------
@@ -336,6 +353,12 @@ impl AbyssHubApp {
                         }
                     }
                     self.apps = apps.into_iter().map(|a| (a.pacote.clone(), a)).collect();
+                    // guarda o nome de todos os jogos, para juntar os repetidos mesmo desinstalados
+                    for a in self.apps.values() {
+                        if a.jogo || self.dados.nomes.contains_key(&a.pacote) {
+                            self.dados.nomes.insert(a.pacote.clone(), a.nome.clone());
+                        }
+                    }
                 }
                 let mut novas = 0;
                 for s in fechadas {
@@ -348,6 +371,7 @@ impl AbyssHubApp {
                     sessoes::mesclar(&mut self.dados.sessoes, s);
                     novas += 1;
                 }
+                self.recalcular_jogos_iguais();
                 self.dados.sincronizado_ate = aberta.as_ref().map(|a| a.1).unwrap_or(ate);
                 self.aberta = aberta.filter(|a| a.0 != self.proprio);
                 self.salvar();
@@ -392,23 +416,86 @@ impl AbyssHubApp {
             .unwrap_or_else(|| pacote.to_string())
     }
 
-    pub(crate) fn visivel(&self, pacote: &str) -> bool {
-        pacote != self.proprio && (self.dados.mostrar_todos || self.dados.eh_jogo(pacote))
+    /// Junta pacotes com o mesmo nome (o mesmo jogo vindo de lojas diferentes).
+    pub(crate) fn recalcular_jogos_iguais(&mut self) {
+        let mut grupos: HashMap<String, Vec<String>> = HashMap::new();
+        let mut nomes: HashMap<String, String> = self.dados.nomes.clone().into_iter().collect();
+        for (p, a) in &self.apps {
+            nomes.insert(p.clone(), a.nome.clone());
+        }
+        for (p, n) in &nomes {
+            if p == &self.proprio {
+                continue;
+            }
+            grupos
+                .entry(crate::ranking::chave_jogo(n, p))
+                .or_default()
+                .push(p.clone());
+        }
+        self.canon.clear();
+        self.apelidos.clear();
+        for (_, mut pacotes) in grupos {
+            if pacotes.len() < 2 {
+                continue;
+            }
+            // o principal: o que está instalado; depois o nome de pacote mais curto
+            pacotes.sort_by_key(|p| (!self.apps.get(p).is_some_and(|a| a.abrivel), p.len(), p.clone()));
+            let principal = pacotes[0].clone();
+            for p in &pacotes {
+                self.canon.insert(p.clone(), principal.clone());
+            }
+            self.apelidos.insert(principal, pacotes);
+        }
     }
 
-    /// Todas as sessões que aparecem na tela (inclui a que está aberta agora).
+    /// O pacote "principal" de um jogo (o mesmo pacote, se não tiver repetido).
+    pub(crate) fn canonico<'a>(&'a self, pacote: &'a str) -> &'a str {
+        self.canon.get(pacote).map(|s| s.as_str()).unwrap_or(pacote)
+    }
+
+    /// Todos os pacotes do mesmo jogo.
+    pub(crate) fn pacotes_de(&self, principal: &str) -> Vec<String> {
+        self.apelidos
+            .get(principal)
+            .cloned()
+            .unwrap_or_else(|| vec![principal.to_string()])
+    }
+
+    /// Conta como jogo se qualquer uma das versões contar.
+    pub(crate) fn eh_jogo(&self, principal: &str) -> bool {
+        self.pacotes_de(principal).iter().any(|p| self.dados.eh_jogo(p))
+    }
+
+    /// Marca/desmarca como jogo todas as versões juntas.
+    pub(crate) fn definir_jogo(&mut self, principal: &str, jogo: bool) {
+        for p in self.pacotes_de(principal) {
+            self.dados.definir_jogo(&p, jogo);
+        }
+    }
+
+    pub(crate) fn visivel(&self, pacote: &str) -> bool {
+        let c = self.canonico(pacote);
+        c != self.proprio && (self.dados.mostrar_todos || self.eh_jogo(c))
+    }
+
+    /// Todas as sessões que aparecem na tela (inclui a que está aberta agora),
+    /// já com os jogos repetidos juntados.
     pub(crate) fn sessoes_visiveis(&self) -> Vec<Sessao> {
         let mut v: Vec<Sessao> = self
             .dados
             .sessoes
             .iter()
             .filter(|s| self.visivel(&s.pacote))
-            .cloned()
+            .map(|s| Sessao {
+                pacote: self.canonico(&s.pacote).to_string(),
+                inicio: s.inicio,
+                fim: s.fim,
+            })
             .collect();
         if let Some((p, ini)) = &self.aberta {
             if self.visivel(p) {
                 v.push(Sessao {
-                    pacote: p.clone(),
+                    pacote: self.canonico(p).to_string(),
                     inicio: *ini,
                     fim: agora_ms(),
                 });
@@ -422,13 +509,17 @@ impl AbyssHubApp {
             .dados
             .sessoes
             .iter()
-            .filter(|s| s.pacote == pacote)
-            .cloned()
+            .filter(|s| self.canonico(&s.pacote) == pacote)
+            .map(|s| Sessao {
+                pacote: pacote.to_string(),
+                inicio: s.inicio,
+                fim: s.fim,
+            })
             .collect();
         if let Some((p, ini)) = &self.aberta {
-            if p == pacote {
+            if self.canonico(p) == pacote {
                 v.push(Sessao {
-                    pacote: p.clone(),
+                    pacote: pacote.to_string(),
                     inicio: *ini,
                     fim: agora_ms(),
                 });
@@ -454,7 +545,14 @@ impl AbyssHubApp {
             }
         }
         let mut v: Vec<Linha> = m.into_values().filter(|l| l.tempo > 0).collect();
-        v.sort_by(|a, b| b.tempo.cmp(&a.tempo));
+        // Desempate fixo (quem jogou por último, depois o nome do pacote): sem isso, jogos com o
+        // mesmo tempo trocavam de lugar a cada quadro, porque a ordem do HashMap muda.
+        v.sort_by(|a, b| {
+            b.tempo
+                .cmp(&a.tempo)
+                .then(b.ultima.cmp(&a.ultima))
+                .then(a.pacote.cmp(&b.pacote))
+        });
         v
     }
 
@@ -493,6 +591,14 @@ impl AbyssHubApp {
         };
         if vencido(self.ultimo_check_conta, intervalo) {
             let nova = self.plat.conta();
+            // mudou o nome ou a foto: envia de novo e atualiza o ranking
+            if nova.estado == EstadoConta::Logado
+                && self.conta.estado == EstadoConta::Logado
+                && (nova.nome != self.conta.nome || nova.foto != self.conta.foto)
+            {
+                self.ultima_publicacao = None;
+                self.lb_pedido = None;
+            }
             if nova.estado == EstadoConta::Logado && self.conta.estado != EstadoConta::Logado {
                 self.ultima_publicacao = None; // publica logo que entra
                 if self.conta.estado == EstadoConta::Entrando {

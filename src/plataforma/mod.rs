@@ -39,6 +39,9 @@ pub struct Conta {
     pub uid: String,
     pub nome: String,
     pub foto: String,
+    pub email: String,
+    /// Formas de entrar ligadas à conta: "google.com", "password".
+    pub provedores: Vec<String>,
 }
 
 /// Imagens que o app pede ao sistema (sempre quadradas, RGBA pré-multiplicado).
@@ -99,6 +102,14 @@ pub trait Plataforma: Send + Sync {
     fn abrir_link(&self, _url: &str) {}
     /// Abre a janelinha de entrar/criar conta com e-mail e senha.
     fn entrar_email(&self) {}
+    /// Mudar o nome que aparece no Leaderboard.
+    fn editar_nome(&self) {}
+    /// Mudar a foto que aparece no Leaderboard (galeria, a do Google ou nenhuma).
+    fn editar_foto(&self) {}
+    /// Conectar uma conta Google à conta atual.
+    fn ligar_google(&self) {}
+    /// Adicionar e-mail e senha à conta atual.
+    fn ligar_email(&self) {}
 
     // ---------- Atualização automática (GitHub Releases) ----------
 
@@ -131,12 +142,19 @@ pub fn ler_conta(json: &str) -> Conta {
         "saiu" => EstadoConta::Saiu,
         _ => EstadoConta::Indisponivel,
     };
+    let provedores = v
+        .get("provedores")
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+        .unwrap_or_default();
     Conta {
         estado,
         msg: t("msg"),
         uid: t("uid"),
         nome: t("nome"),
         foto: t("foto"),
+        email: t("email"),
+        provedores,
     }
 }
 

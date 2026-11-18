@@ -20,7 +20,7 @@
       "collectionGroup": "abysshub_pares",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "chave", "order": "ASCENDING" },
         { "fieldPath": "semana_ms", "order": "DESCENDING" }
       ]
     },
@@ -28,7 +28,7 @@
       "collectionGroup": "abysshub_pares",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "chave", "order": "ASCENDING" },
         { "fieldPath": "tudo_ms", "order": "DESCENDING" }
       ]
     },
@@ -36,7 +36,7 @@
       "collectionGroup": "abysshub_pares",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pacote", "order": "ASCENDING" },
+        { "fieldPath": "chave", "order": "ASCENDING" },
         { "fieldPath": "dia", "order": "ASCENDING" },
         { "fieldPath": "hoje_ms", "order": "DESCENDING" }
       ]

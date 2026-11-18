@@ -43,6 +43,7 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 - Ranking dos seus jogos com o tempo, o número de sessões e quando você jogou por último
 - Tela de cada jogo com total, média por sessão, sessão mais longa, gráfico da semana e todas as sessões
 - Os jogos são reconhecidos sozinhos; dá para marcar ou desmarcar qualquer app como jogo
+- O mesmo jogo instalado de lojas diferentes (ex.: Play Store e Galaxy Store) conta como um só
 
 ### Leaderboard
 
@@ -51,7 +52,8 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 - Períodos: **Semana** (padrão), **Hoje** e **Tudo**
 - Pódio com os 3 primeiros e a sua posição destacada
 - **Atualiza sozinho a cada minuto**
-- Entre com **Google** ou com **e-mail e senha**; só aparece no ranking quem entrou
+- Entre com **Google** ou com **e-mail e senha** (e dá para conectar os dois na mesma conta); só aparece no ranking quem entrou
+- Escolha o **nome** e a **foto** que aparecem no ranking
 
 ### Histórico
 
@@ -61,6 +63,7 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 
 - **Tema claro e escuro** (segue o celular ou você escolhe)
 - Animações suaves, que podem ser desligadas para economizar bateria
+- Rolagem com impulso, como nos outros apps do celular
 - **Atualização automática**: o app avisa quando sai uma versão nova, baixa e instala sem você precisar entrar no GitHub
 
 ## Baixar e instalar
@@ -86,7 +89,7 @@ Depois disso, as próximas versões chegam pelo próprio app.
 ## Privacidade
 
 - O seu histórico de uso **fica no seu celular**. O AbyssHub não envia a lista de apps que você usa.
-- **Só se você entrar no Leaderboard**, o app envia o seu **nome**, a sua **foto** (quando entra com Google) e o **tempo dos apps que contam como jogo**. Os outros jogadores veem essas informações no ranking.
+- **Só se você entrar no Leaderboard**, o app envia o **nome** e a **foto** que você escolheu e o **tempo dos apps que contam como jogo**. Os outros jogadores veem essas informações no ranking.
 - Nas configurações você pode **sair da conta** ou **sair e apagar seus dados do Leaderboard** a qualquer momento.
 - O app não tem anúncios e não usa rastreadores.
 

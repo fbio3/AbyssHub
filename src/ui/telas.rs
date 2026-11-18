@@ -40,9 +40,7 @@ impl AbyssHubApp {
 
     pub(super) fn pagina(&mut self, ui: &mut Ui, topo: f32) {
         if !self.permissao {
-            egui::ScrollArea::vertical()
-                .id_salt("permissao")
-                .show(ui, |ui| self.tela_permissao(ui, topo));
+            self.rolagem(ui, "permissao", |s, ui| s.tela_permissao(ui, topo));
             return;
         }
         let chave = match &self.detalhe {
@@ -51,20 +49,17 @@ impl AbyssHubApp {
         };
         let p = self.an.desde(self.inicio_pagina, 0.0, 0.38);
         let dx = self.direcao * 28.0;
-        egui::ScrollArea::vertical()
-            .id_salt(chave)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                entrada(ui, p, dx, 0.0, |ui| match self.detalhe.clone() {
-                    Some(pacote) => self.tela_detalhe(ui, topo, &pacote),
-                    None => match self.aba {
-                        Aba::Inicio => self.tela_inicio(ui, topo),
-                        Aba::Jogos => self.tela_jogos(ui, topo),
-                        Aba::Leaderboard => self.tela_leaderboard(ui, topo),
-                        Aba::Historico => self.tela_historico(ui, topo),
-                    },
-                });
+        self.rolagem(ui, &chave, |s, ui| {
+            entrada(ui, p, dx, 0.0, |ui| match s.detalhe.clone() {
+                Some(pacote) => s.tela_detalhe(ui, topo, &pacote),
+                None => match s.aba {
+                    Aba::Inicio => s.tela_inicio(ui, topo),
+                    Aba::Jogos => s.tela_jogos(ui, topo),
+                    Aba::Leaderboard => s.tela_leaderboard(ui, topo),
+                    Aba::Historico => s.tela_historico(ui, topo),
+                },
             });
+        });
     }
 
     /// Área dos cartões, com as margens do AbyssSub e espaço para o botão dourado.
@@ -911,7 +906,7 @@ impl AbyssHubApp {
             });
 
             s.cartao(ui, 1, |s, ui| {
-                let mut jogo = s.dados.eh_jogo(pacote);
+                let mut jogo = s.eh_jogo(pacote);
                 if linha_interruptor(
                     ui,
                     &mut s.an,
@@ -921,7 +916,7 @@ impl AbyssHubApp {
                     Some("Desligue se este app não for um jogo."),
                     &mut jogo,
                 ) {
-                    s.dados.definir_jogo(pacote, jogo);
+                    s.definir_jogo(pacote, jogo);
                     s.salvar();
                 }
             });
@@ -1149,10 +1144,7 @@ impl AbyssHubApp {
                 let mut area = folha.shrink2(vec2(16.0, 0.0));
                 area.min.y += 26.0;
                 ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("folha_rolagem")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.conteudo_ajustes(ui));
+                    self.rolagem(ui, "folha_rolagem", |s, ui| s.conteudo_ajustes(ui));
                 });
 
                 if fundo.clicked() {
@@ -1195,9 +1187,41 @@ impl AbyssHubApp {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.add(egui::Label::new(txt(&conta.nome, 15.0, Peso::Semi, p.text)).truncate());
-                            ui.label(txt("Aparecendo no Leaderboard", 12.5, Peso::Normal, p.muted));
+                            let google = conta.provedores.iter().any(|x| x == "google.com");
+                            let email = conta.provedores.iter().any(|x| x == "password");
+                            let formas = match (google, email) {
+                                (true, true) => "Entra com Google e e-mail",
+                                (true, false) => "Entra com Google",
+                                (false, true) => "Entra com e-mail",
+                                _ => "Aparecendo no Leaderboard",
+                            };
+                            ui.label(txt(formas, 12.5, Peso::Normal, p.muted));
                         });
                     });
+                    ui.label(txt(
+                        "Nome e foto que os outros jogadores veem no Leaderboard:",
+                        12.5,
+                        Peso::Normal,
+                        p.muted,
+                    ));
+                    ui.columns(2, |c| {
+                        if botao(&mut c[0], &mut self.an, &p, "mudar_nome", "Mudar nome", false).clicked() {
+                            self.plat.editar_nome();
+                        }
+                        if botao(&mut c[1], &mut self.an, &p, "mudar_foto", "Mudar foto", false).clicked() {
+                            self.plat.editar_foto();
+                        }
+                    });
+                    if !conta.provedores.iter().any(|x| x == "google.com")
+                        && botao(ui, &mut self.an, &p, "ligar_google", "Conectar conta Google", false).clicked()
+                    {
+                        self.plat.ligar_google();
+                    }
+                    if !conta.provedores.iter().any(|x| x == "password")
+                        && botao(ui, &mut self.an, &p, "ligar_email", "Adicionar e-mail e senha", false).clicked()
+                    {
+                        self.plat.ligar_email();
+                    }
                     if botao(ui, &mut self.an, &p, "sair", "Sair da conta", false).clicked() {
                         self.plat.sair();
                         self.ultimo_check_conta = None;
@@ -1302,20 +1326,30 @@ impl AbyssHubApp {
                 Peso::Normal,
                 p.muted,
             ));
-            let mut lista: Vec<(String, String)> = self
-                .apps
-                .values()
-                .filter(|a| a.abrivel && a.pacote != self.proprio)
-                .map(|a| (a.pacote.clone(), a.nome.clone()))
-                .collect();
+            // um item por jogo (as versões de lojas diferentes aparecem juntas)
+            let mut lista: Vec<(String, String)> = Vec::new();
+            for a in self.apps.values().filter(|a| a.abrivel && a.pacote != self.proprio) {
+                let c = self.canonico(&a.pacote).to_string();
+                if !lista.iter().any(|(p, _)| *p == c) {
+                    let nome = self.nome(&c);
+                    lista.push((c, nome));
+                }
+            }
             lista.sort_by_key(|(_, n)| n.to_lowercase());
+            // jogos primeiro (a ordem por nome continua dentro de cada grupo)
+            lista.sort_by_key(|(pk, _)| !self.eh_jogo(pk));
             if lista.is_empty() {
                 ui.label(txt("Carregando lista de apps...", 13.0, Peso::Normal, p.muted));
             }
-            // jogos primeiro
-            lista.sort_by_key(|(pk, _)| !self.dados.eh_jogo(pk));
-            for (pacote, nome) in &lista {
-                let mut j = self.dados.eh_jogo(pacote);
+            const INICIAIS: usize = 10;
+            let total = lista.len();
+            let mostrar = if self.ajustes_todos_apps {
+                total
+            } else {
+                total.min(INICIAIS)
+            };
+            for (pacote, nome) in lista.iter().take(mostrar) {
+                let mut j = self.eh_jogo(pacote);
                 ui.horizontal(|ui| {
                     self.icone_jogo(ui, pacote, nome, 30.0);
                     ui.allocate_ui_with_layout(
@@ -1327,11 +1361,21 @@ impl AbyssHubApp {
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if desenho::interruptor(ui, &mut self.an, &p, &format!("ap:{pacote}"), &mut j).changed() {
-                            self.dados.definir_jogo(pacote, j);
+                            self.definir_jogo(pacote, j);
                             self.salvar();
                         }
                     });
                 });
+            }
+            if total > INICIAIS {
+                let texto = if self.ajustes_todos_apps {
+                    "Mostrar menos".to_string()
+                } else {
+                    format!("Ver todos os {total} apps")
+                };
+                if botao(ui, &mut self.an, &p, "todos_apps", &texto, false).clicked() {
+                    self.ajustes_todos_apps = !self.ajustes_todos_apps;
+                }
             }
         });
 

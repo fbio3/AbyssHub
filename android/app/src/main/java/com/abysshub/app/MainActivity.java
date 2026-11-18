@@ -147,10 +147,17 @@ public class MainActivity extends NativeActivity {
             }
             FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
             if (u != null) {
+                garantirPerfil(u.getUid());
                 o.put("estado", "logado");
                 o.put("uid", u.getUid());
-                o.put("nome", nomeDe(u));
-                o.put("foto", fotoDe(u));
+                o.put("nome", nomeEfetivo(u));
+                o.put("foto", fotoEfetiva(u));
+                o.put("email", u.getEmail() == null ? "" : u.getEmail());
+                JSONArray prov = new JSONArray();
+                for (com.google.firebase.auth.UserInfo i : u.getProviderData()) {
+                    if (!"firebase".equals(i.getProviderId())) prov.put(i.getProviderId());
+                }
+                o.put("provedores", prov);
             } else {
                 o.put("estado", estado);
                 o.put("msg", mensagem);
@@ -163,18 +170,275 @@ public class MainActivity extends NativeActivity {
 
     private static String nomeDe(FirebaseUser u) {
         String n = u.getDisplayName();
+        if (n == null || n.trim().isEmpty()) {
+            for (com.google.firebase.auth.UserInfo i : u.getProviderData()) {
+                if (i.getDisplayName() != null && !i.getDisplayName().trim().isEmpty()) {
+                    n = i.getDisplayName();
+                    break;
+                }
+            }
+        }
         if (n == null || n.trim().isEmpty()) n = "Jogador";
         return n.trim();
     }
 
+    /** Foto da conta Google (também quando o Google foi conectado depois a uma conta de e-mail). */
     private static String fotoDe(FirebaseUser u) {
-        if (u.getPhotoUrl() == null) return "";
+        Uri f = u.getPhotoUrl();
+        if (f == null) {
+            for (com.google.firebase.auth.UserInfo i : u.getProviderData()) {
+                if ("google.com".equals(i.getProviderId()) && i.getPhotoUrl() != null) {
+                    f = i.getPhotoUrl();
+                    break;
+                }
+            }
+        }
+        if (f == null) return "";
         // foto maior que a padrão (96 px)
-        return u.getPhotoUrl().toString().replace("s96-c", "s256-c");
+        return f.toString().replace("s96-c", "s256-c");
+    }
+
+    // =================================================================
+    // Perfil do Leaderboard: nome e foto escolhidos pela pessoa
+    // (abysshub_perfis/{uid}: nome, foto_ver; a foto fica em abysshub_fotos/{uid})
+    // =================================================================
+
+    private static final String PERFIS = "abysshub_perfis";
+    private static final String FOTOS = "abysshub_fotos";
+    private static final int PEDIDO_FOTO = 4107;
+
+    private static volatile String perfilUid = "";
+    private static volatile boolean perfilCarregando = false;
+    private static volatile String perfilNome = "";
+    /** 0 = foto do Google, -1 = sem foto, maior que 0 = foto escolhida (versão) */
+    private static volatile long perfilFotoVer = 0;
+
+    private static String nomeEfetivo(FirebaseUser u) {
+        return perfilUid.equals(u.getUid()) && !perfilNome.isEmpty() ? perfilNome : nomeDe(u);
+    }
+
+    private static String fotoEfetiva(FirebaseUser u) {
+        if (perfilUid.equals(u.getUid())) {
+            if (perfilFotoVer > 0) return "fs:" + u.getUid() + ":" + perfilFotoVer;
+            if (perfilFotoVer < 0) return "";
+        }
+        return fotoDe(u);
+    }
+
+    /** Lê o perfil salvo (uma vez por conta), numa thread. */
+    private static void garantirPerfil(String uid) {
+        if (uid.equals(perfilUid) || perfilCarregando) return;
+        perfilCarregando = true;
+        new Thread(() -> {
+            try {
+                carregarPerfil(uid);
+            } finally {
+                perfilCarregando = false;
+            }
+        }).start();
+    }
+
+    private static void carregarPerfil(String uid) {
+        try {
+            DocumentSnapshot d = Tasks.await(
+                    FirebaseFirestore.getInstance().collection(PERFIS).document(uid).get(), 15, TimeUnit.SECONDS);
+            perfilNome = texto(d, "nome").trim();
+            perfilFotoVer = numero(d, "foto_ver");
+            perfilUid = uid;
+        } catch (Throwable t) {
+            Log.w(TAG, "perfil", t);
+        }
+    }
+
+    private static void salvarPerfil(String uid, Map<String, Object> campos, String ok) {
+        FirebaseFirestore.getInstance().collection(PERFIS).document(uid)
+                .set(campos, com.google.firebase.firestore.SetOptions.merge())
+                .addOnCompleteListener(t -> {
+                    if (t.isSuccessful()) {
+                        if (ok != null) avisar(ok);
+                    } else {
+                        avisar("Não foi possível salvar: " + mensagemDe(t.getException()));
+                    }
+                });
+    }
+
+    /** Janelinha para mudar o nome que aparece no Leaderboard. */
+    public static void editarNome() {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+            if (u == null) return;
+            EditText campo = a.campo("Seu nome", InputType.TYPE_CLASS_TEXT
+                    | InputType.TYPE_TEXT_VARIATION_PERSON_NAME | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+            campo.setText(nomeEfetivo(u));
+            campo.setSelection(campo.getText().length());
+            LinearLayout l = new LinearLayout(a);
+            l.setPadding(a.dp(22), a.dp(8), a.dp(22), 0);
+            l.addView(campo, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+            AlertDialog d = new AlertDialog.Builder(a, a.temaDialogo())
+                    .setTitle("Nome no Leaderboard")
+                    .setView(l)
+                    .setPositiveButton("Salvar", null)
+                    .setNegativeButton("Cancelar", null)
+                    .create();
+            d.setOnShowListener(x -> d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String n = campo.getText().toString().trim();
+                if (n.isEmpty()) { campo.setError("Digite um nome"); return; }
+                if (n.length() > 30) { campo.setError("Use no máximo 30 letras"); return; }
+                perfilUid = u.getUid();
+                perfilNome = n;
+                Map<String, Object> m = new HashMap<>();
+                m.put("nome", n);
+                salvarPerfil(u.getUid(), m, "Nome atualizado!");
+                d.dismiss();
+            }));
+            d.show();
+        });
+    }
+
+    /** Escolher a foto do Leaderboard: da galeria, a do Google ou nenhuma. */
+    public static void editarFoto() {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+            if (u == null) return;
+            boolean temGoogle = !fotoDe(u).isEmpty();
+            String[] opcoes = temGoogle
+                    ? new String[]{"Escolher da galeria", "Usar a foto da conta Google", "Ficar sem foto"}
+                    : new String[]{"Escolher da galeria", "Ficar sem foto"};
+            new AlertDialog.Builder(a, a.temaDialogo())
+                    .setTitle("Foto no Leaderboard")
+                    .setItems(opcoes, (d, i) -> {
+                        String escolha = opcoes[i];
+                        Map<String, Object> m = new HashMap<>();
+                        if (escolha.startsWith("Escolher")) {
+                            Intent pegar = new Intent(Intent.ACTION_GET_CONTENT).setType("image/*")
+                                    .addCategory(Intent.CATEGORY_OPENABLE);
+                            a.startActivityForResult(Intent.createChooser(pegar, "Escolha uma foto"), PEDIDO_FOTO);
+                            return;
+                        }
+                        perfilUid = u.getUid();
+                        perfilFotoVer = escolha.startsWith("Usar") ? 0 : -1;
+                        m.put("foto_ver", perfilFotoVer);
+                        salvarPerfil(u.getUid(), m, "Foto atualizada!");
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int pedido, int resultado, Intent dados) {
+        super.onActivityResult(pedido, resultado, dados);
+        if (pedido != PEDIDO_FOTO || resultado != RESULT_OK || dados == null || dados.getData() == null) return;
+        Uri origem = dados.getData();
+        FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+        if (u == null) return;
+        avisar("Enviando a foto…");
+        new Thread(() -> {
+            try {
+                // lê a imagem já reduzida (fotos de câmera são enormes)
+                BitmapFactory.Options op = new BitmapFactory.Options();
+                op.inJustDecodeBounds = true;
+                try (InputStream in = getContentResolver().openInputStream(origem)) {
+                    BitmapFactory.decodeStream(in, null, op);
+                }
+                int amostra = 1;
+                while (Math.min(op.outWidth, op.outHeight) / (amostra * 2) >= 256) amostra *= 2;
+                BitmapFactory.Options op2 = new BitmapFactory.Options();
+                op2.inSampleSize = amostra;
+                Bitmap b;
+                try (InputStream in = getContentResolver().openInputStream(origem)) {
+                    b = BitmapFactory.decodeStream(in, null, op2);
+                }
+                if (b == null) throw new IllegalStateException("não deu para abrir essa imagem");
+                Bitmap quadrada = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888);
+                Canvas c = new Canvas(quadrada);
+                c.drawColor(0xFF12183E);
+                int w = b.getWidth(), h = b.getHeight(), lado = Math.min(w, h);
+                Rect src = new Rect((w - lado) / 2, (h - lado) / 2, (w - lado) / 2 + lado, (h - lado) / 2 + lado);
+                c.drawBitmap(b, src, new Rect(0, 0, 256, 256), new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG));
+                ByteArrayOutputStream s = new ByteArrayOutputStream();
+                quadrada.compress(Bitmap.CompressFormat.JPEG, 82, s);
+                String jpg = Base64.encodeToString(s.toByteArray(), Base64.NO_WRAP);
+
+                long ver = System.currentTimeMillis();
+                Map<String, Object> foto = new HashMap<>();
+                foto.put("jpg", jpg);
+                foto.put("ver", ver);
+                Tasks.await(FirebaseFirestore.getInstance().collection(FOTOS).document(u.getUid()).set(foto),
+                        30, TimeUnit.SECONDS);
+                perfilUid = u.getUid();
+                perfilFotoVer = ver;
+                Map<String, Object> m = new HashMap<>();
+                m.put("foto_ver", ver);
+                salvarPerfil(u.getUid(), m, "Foto atualizada!");
+            } catch (Throwable t) {
+                avisar("Não foi possível usar essa foto: " + mensagemDe(t));
+            }
+        }).start();
+    }
+
+    /** Adiciona e-mail e senha a quem entrou com Google (para entrar das duas formas). */
+    public static void ligarEmail() {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+            if (u == null) return;
+            LinearLayout l = new LinearLayout(a);
+            l.setOrientation(LinearLayout.VERTICAL);
+            l.setPadding(a.dp(22), a.dp(8), a.dp(22), 0);
+            EditText email = a.campo("E-mail", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+            if (u.getEmail() != null) email.setText(u.getEmail());
+            EditText senha = a.campo("Crie uma senha (mínimo 6 caracteres)",
+                    InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            l.addView(email);
+            l.addView(senha);
+            AlertDialog d = new AlertDialog.Builder(a, a.temaDialogo())
+                    .setTitle("Adicionar e-mail e senha")
+                    .setView(l)
+                    .setPositiveButton("Adicionar", null)
+                    .setNegativeButton("Cancelar", null)
+                    .create();
+            d.setOnShowListener(x -> d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String e = email.getText().toString().trim();
+                String s = senha.getText().toString();
+                if (e.isEmpty()) { email.setError("Digite seu e-mail"); return; }
+                if (s.length() < 6) { senha.setError("A senha precisa de pelo menos 6 caracteres"); return; }
+                v.setEnabled(false);
+                u.linkWithCredential(com.google.firebase.auth.EmailAuthProvider.getCredential(e, s))
+                        .addOnCompleteListener(t -> {
+                            if (t.isSuccessful()) {
+                                avisar("Pronto! Agora você também entra com " + e + ".");
+                                d.dismiss();
+                            } else {
+                                v.setEnabled(true);
+                                Exception ex = t.getException();
+                                avisar(ex instanceof FirebaseAuthUserCollisionException
+                                        ? "Esse e-mail já é usado por outro perfil do AbyssHub."
+                                        : "Não foi possível adicionar: " + traduzir(ex));
+                            }
+                        });
+            }));
+            d.show();
+        });
     }
 
     /** Abre a janelinha de contas do Google. O resultado aparece em estadoConta(). */
     public static void entrar() {
+        pedirGoogle(false);
+    }
+
+    /** Liga uma conta Google à conta atual (quem entrou com e-mail e senha). */
+    public static void ligarGoogle() {
+        pedirGoogle(true);
+    }
+
+    private static void pedirGoogle(boolean ligar) {
         MainActivity a = ativa;
         if (a == null) return;
         a.runOnUiThread(() -> {
@@ -183,8 +447,10 @@ public class MainActivity extends NativeActivity {
                 mensagem = "O login não está disponível nesta versão do app.";
                 return;
             }
-            estado = "entrando";
-            mensagem = "";
+            if (!ligar) {
+                estado = "entrando";
+                mensagem = "";
+            }
             try {
                 GetGoogleIdOption opcao = new GetGoogleIdOption.Builder()
                         .setFilterByAuthorizedAccounts(false)
@@ -198,33 +464,48 @@ public class MainActivity extends NativeActivity {
                         new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
                             @Override
                             public void onResult(GetCredentialResponse r) {
-                                usarCredencial(r.getCredential());
+                                usarCredencial(r.getCredential(), ligar);
                             }
 
                             @Override
                             public void onError(GetCredentialException e) {
                                 if (e instanceof GetCredentialCancellationException) {
-                                    estado = "saiu";
-                                    mensagem = "";
+                                    if (!ligar) {
+                                        estado = "saiu";
+                                        mensagem = "";
+                                    }
                                 } else if (e instanceof NoCredentialException) {
-                                    falhou("Nenhuma conta Google neste celular.");
+                                    falhou("Nenhuma conta Google neste celular.", ligar);
                                 } else {
-                                    falhou("Não foi possível entrar com o Google: " + e.getMessage());
+                                    falhou("Não foi possível usar o Google: " + e.getMessage(), ligar);
                                 }
                             }
                         });
             } catch (Throwable t) {
-                falhou("Não foi possível entrar com o Google: " + t.getMessage());
+                falhou("Não foi possível usar o Google: " + t.getMessage(), ligar);
             }
         });
     }
 
-    private static void usarCredencial(Credential c) {
+    private static void usarCredencial(Credential c, boolean ligar) {
         try {
             if (c instanceof CustomCredential
                     && GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(c.getType())) {
                 GoogleIdTokenCredential g = GoogleIdTokenCredential.createFrom(c.getData());
                 AuthCredential cred = GoogleAuthProvider.getCredential(g.getIdToken(), null);
+                FirebaseUser atual = FirebaseAuth.getInstance().getCurrentUser();
+                if (ligar && atual != null) {
+                    atual.linkWithCredential(cred).addOnCompleteListener(t -> {
+                        if (t.isSuccessful()) {
+                            avisar("Conta Google conectada! Agora dá para entrar com ela também.");
+                        } else if (t.getException() instanceof FirebaseAuthUserCollisionException) {
+                            avisar("Essa conta Google já é usada por outro perfil do AbyssHub.");
+                        } else {
+                            avisar("Não foi possível conectar: " + traduzir(t.getException()));
+                        }
+                    });
+                    return;
+                }
                 FirebaseAuth.getInstance().signInWithCredential(cred).addOnCompleteListener(t -> {
                     if (t.isSuccessful()) {
                         estado = "saiu"; // a partir daqui vale o FirebaseAuth (logado)
@@ -235,11 +516,23 @@ public class MainActivity extends NativeActivity {
                     }
                 });
             } else {
-                falhou("Tipo de conta não suportado.");
+                falhou("Tipo de conta não suportado.", ligar);
             }
         } catch (Throwable t) {
-            falhou("Erro no login: " + t.getMessage());
+            falhou("Erro no login: " + t.getMessage(), ligar);
         }
+    }
+
+    private static void falhou(String msg, boolean soAvisar) {
+        if (soAvisar) avisar(msg);
+        else falhou(msg);
+    }
+
+    /** Mensagem rápida na tela (Toast). */
+    private static void avisar(String msg) {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(() -> Toast.makeText(a, msg, Toast.LENGTH_LONG).show());
     }
 
     private static void falhou(String msg) {
@@ -256,6 +549,9 @@ public class MainActivity extends NativeActivity {
         }
         estado = "saiu";
         mensagem = "";
+        perfilUid = "";
+        perfilNome = "";
+        perfilFotoVer = 0;
         if (a == null) return;
         a.runOnUiThread(() -> {
             try {
@@ -286,6 +582,11 @@ public class MainActivity extends NativeActivity {
 
     private boolean escuro() {
         return (getResources().getConfiguration().uiMode & 0x30) == 0x20;
+    }
+
+    private int temaDialogo() {
+        return escuro() ? android.R.style.Theme_DeviceDefault_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
     }
 
     private EditText campo(String dica, int tipo) {
@@ -334,9 +635,7 @@ public class MainActivity extends NativeActivity {
             l.addView(esqueci);
         }
 
-        int tema = escuro() ? android.R.style.Theme_DeviceDefault_Dialog_Alert
-                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
-        AlertDialog d = new AlertDialog.Builder(this, tema)
+        AlertDialog d = new AlertDialog.Builder(this, temaDialogo())
                 .setTitle(criar ? "Criar conta" : "Entrar com e-mail")
                 .setView(l)
                 .setPositiveButton(criar ? "Criar conta" : "Entrar", null)
@@ -554,8 +853,9 @@ public class MainActivity extends NativeActivity {
             JSONObject p = new JSONObject(json);
             FirebaseFirestore db = FirebaseFirestore.getInstance();
             String uid = u.getUid();
-            String nome = nomeDe(u);
-            String foto = fotoDe(u);
+            if (!perfilUid.equals(u.getUid())) carregarPerfil(u.getUid());
+            String nome = nomeEfetivo(u);
+            String foto = fotoEfetiva(u);
             long agora = System.currentTimeMillis();
             String dia = p.optString("dia");
 
@@ -575,30 +875,61 @@ public class MainActivity extends NativeActivity {
             b.set(db.collection(PESSOAS).document(uid), pessoa);
 
             JSONArray jogos = p.optJSONArray("jogos");
+            Set<String> meus = new HashSet<>();
             if (jogos != null) {
                 for (int i = 0; i < jogos.length(); i++) {
                     JSONObject j = jogos.getJSONObject(i);
                     String pacote = j.optString("pacote");
                     if (pacote.isEmpty()) continue;
+                    // a chave é o nome do jogo: junta o mesmo jogo de lojas diferentes
+                    String chave = j.optString("chave", pacote);
                     Map<String, Object> par = new HashMap<>();
                     par.put("uid", uid);
                     par.put("nome", nome);
                     par.put("foto", foto);
                     par.put("pacote", pacote);
+                    par.put("chave", chave);
                     par.put("jogo", j.optString("nome"));
                     par.put("dia", dia);
                     par.put("atualizado_ms", agora);
                     par.put("hoje_ms", j.optLong("hoje_ms"));
                     par.put("semana_ms", j.optLong("semana_ms"));
                     par.put("tudo_ms", j.optLong("tudo_ms"));
-                    b.set(db.collection(PARES).document(uid + "__" + pacote), par);
+                    b.set(db.collection(PARES).document(uid + "__" + chave), par);
+                    meus.add(uid + "__" + chave);
                 }
             }
             Tasks.await(b.commit(), 20, TimeUnit.SECONDS);
+            limparParesAntigos(db, uid, meus);
             if (jogos != null) enviarIcones(db, jogos);
             return "";
         } catch (Throwable t) {
             return mensagemDe(t);
+        }
+    }
+
+    private static volatile String limpouPara = "";
+
+    /**
+     * Uma vez por vez que o app abre: apaga os documentos antigos desta pessoa que não existem mais
+     * (jogos desinstalados ou do formato antigo, antes de juntar jogos repetidos).
+     */
+    private static void limparParesAntigos(FirebaseFirestore db, String uid, Set<String> meus) {
+        if (uid.equals(limpouPara)) return;
+        try {
+            QuerySnapshot s = Tasks.await(db.collection(PARES).whereEqualTo("uid", uid).get(), 20, TimeUnit.SECONDS);
+            WriteBatch b = db.batch();
+            int n = 0;
+            for (DocumentSnapshot d : s.getDocuments()) {
+                if (!meus.contains(d.getId())) {
+                    b.delete(d.getReference());
+                    n++;
+                }
+            }
+            if (n > 0) Tasks.await(b.commit(), 20, TimeUnit.SECONDS);
+            limpouPara = uid;
+        } catch (Throwable t) {
+            Log.w(TAG, "limpar", t);
         }
     }
 
@@ -643,7 +974,7 @@ public class MainActivity extends NativeActivity {
             FirebaseFirestore db = FirebaseFirestore.getInstance();
             String campo = periodo + "_ms";
             Query q = db.collection(modo.equals("pessoas") ? PESSOAS : PARES);
-            if (modo.equals("jogo")) q = q.whereEqualTo("pacote", pacote);
+            if (modo.equals("jogo")) q = q.whereEqualTo("chave", pacote); // aqui "pacote" é a chave do jogo
             if (periodo.equals("hoje")) q = q.whereEqualTo("dia", dia);
             q = q.orderBy(campo, Query.Direction.DESCENDING).limit(60);
             QuerySnapshot snap = Tasks.await(q.get(), 20, TimeUnit.SECONDS);
@@ -668,6 +999,7 @@ public class MainActivity extends NativeActivity {
                 } else {
                     o.put("pacote", texto(d, "pacote"));
                     o.put("jogo", texto(d, "jogo"));
+                    o.put("chave", texto(d, "chave"));
                 }
                 saida.put(o);
                 if (saida.length() >= 50) break;
@@ -739,6 +1071,7 @@ public class MainActivity extends NativeActivity {
 
     /** Baixa uma foto (ex.: a foto da conta Google). */
     public static byte[] baixarImagem(String url, int tam) {
+        if (url.startsWith("fs:")) return fotoGuardada(url, tam);
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(url).openConnection();
@@ -752,6 +1085,24 @@ public class MainActivity extends NativeActivity {
             return null;
         } finally {
             if (c != null) c.disconnect();
+        }
+    }
+
+    /** Foto escolhida da galeria (endereço "fs:{uid}:{versão}"), guardada no Firestore. */
+    private static byte[] fotoGuardada(String url, int tam) {
+        try {
+            if (FirebaseAuth.getInstance().getCurrentUser() == null) return null;
+            String[] partes = url.split(":");
+            if (partes.length < 2) return null;
+            DocumentSnapshot s = Tasks.await(
+                    FirebaseFirestore.getInstance().collection(FOTOS).document(partes[1]).get(), 15, TimeUnit.SECONDS);
+            Object o = s.get("jpg");
+            if (!(o instanceof String)) return null;
+            byte[] bytes = Base64.decode((String) o, Base64.DEFAULT);
+            Bitmap b = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            return b == null ? null : paraRgba(b, tam);
+        } catch (Throwable t) {
+            return null;
         }
     }
 

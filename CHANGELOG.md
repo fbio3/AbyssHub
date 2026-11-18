@@ -1,5 +1,19 @@
 # Mudanças do AbyssHub
 
+## v2.0.0
+
+- Rolagem com impulso em todo o app: ao soltar o dedo a página continua rolando conforme a força do movimento e vai parando aos poucos.
+- Barra de rolagem da direita mais grossa, fácil de pegar e arrastar com o dedo.
+- Jogos repetidos agora contam como um só: o mesmo jogo instalado de lojas diferentes (ex.: Roblox da Play Store e da Galaxy Store) é juntado pelo nome.
+- No Leaderboard, o mesmo jogo de lojas diferentes também aparece junto, para todo mundo.
+- Configurações: mudar o nome que aparece no Leaderboard, mesmo entrando com Google.
+- Configurações: mudar a foto do Leaderboard (escolher da galeria, usar a foto da conta Google ou ficar sem foto).
+- Configurações: conectar uma conta Google a quem entrou com e-mail e senha, e adicionar e-mail e senha a quem entrou com Google.
+- A conta mostra com o que você entra (Google, e-mail ou os dois).
+- Configurações: a lista "O que conta como jogo" mostra só os 10 primeiros, com o botão "Ver todos os apps" para abrir a lista inteira.
+- A lista de apps não repete mais o mesmo jogo de lojas diferentes.
+- Seus documentos antigos do Leaderboard (jogos desinstalados ou repetidos) são limpos sozinhos.
+
 ## v1.0.0 — primeira versão pública
 
 - Novo ícone do AbyssHub (o explorador olhando o abismo, com o controle dourado), também como ícone adaptável do Android.
