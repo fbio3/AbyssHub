@@ -10,7 +10,7 @@ use jni::objects::{JByteArray, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
 use winit::platform::android::activity::AndroidApp;
 
-use super::{ler_conta, Conta, InfoApp, PedidoImagem, Plataforma};
+use super::{ler_conta, ler_steam, Conta, InfoApp, PedidoImagem, Plataforma, SteamEstado};
 use crate::sessoes::{self, Evento};
 
 const CATEGORIA_JOGO: i32 = 0; // ApplicationInfo.CATEGORY_GAME
@@ -56,6 +56,21 @@ impl PlataformaAndroid {
             env.call_static_method(&classe, nome, "()V", &[])?;
             Ok(())
         });
+    }
+
+    /// Chama um método "static String nome(String...)" do MainActivity.java.
+    fn estatico_texto(&self, nome: &str, args: &[&str]) -> Result<String, String> {
+        self.com_env(|env, act| {
+            let classe = env.get_object_class(act)?;
+            let mut objs = Vec::with_capacity(args.len());
+            for a in args {
+                objs.push(JObject::from(env.new_string(a)?));
+            }
+            let valores: Vec<JValue> = objs.iter().map(JValue::Object).collect();
+            let assinatura = format!("({})Ljava/lang/String;", "Ljava/lang/String;".repeat(args.len()));
+            let r = env.call_static_method(&classe, nome, assinatura, &valores)?.l()?;
+            texto(env, r)
+        })
     }
 
     /// Roda `f` com um JNIEnv da thread atual e a Activity.
@@ -346,31 +361,43 @@ impl Plataforma for PlataformaAndroid {
         }
     }
 
-    fn buscar_ranking(&self, modo: &str, periodo: &str, pacote: &str, dia: &str) -> Result<String, String> {
-        let r = self.com_env(|env, act| {
-            let classe = env.get_object_class(act)?;
-            let a = env.new_string(modo)?;
-            let b = env.new_string(periodo)?;
-            let c = env.new_string(pacote)?;
-            let d = env.new_string(dia)?;
-            let r = env
-                .call_static_method(
-                    &classe,
-                    "buscar",
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-                    &[
-                        JValue::Object(&a),
-                        JValue::Object(&b),
-                        JValue::Object(&c),
-                        JValue::Object(&d),
-                    ],
-                )?
-                .l()?;
-            texto(env, r)
-        })?;
+    fn buscar_ranking(
+        &self,
+        modo: &str,
+        periodo: &str,
+        plataforma: &str,
+        chave: &str,
+        dia: &str,
+    ) -> Result<String, String> {
+        let r = self.estatico_texto("buscar", &[modo, periodo, plataforma, chave, dia])?;
         match r.strip_prefix("ERRO:") {
             Some(e) => Err(e.to_string()),
             None => Ok(r),
+        }
+    }
+
+    fn steam_estado(&self) -> SteamEstado {
+        self.estatico_texto("steamEstado", &[])
+            .map(|j| ler_steam(&j))
+            .unwrap_or_default()
+    }
+
+    fn steam_conectar(&self) {
+        self.estatico_void("steamConectar");
+    }
+
+    fn steam_desconectar(&self) {
+        self.estatico_void("steamDesconectar");
+    }
+
+    fn steam_jogos(&self) -> Result<Option<String>, String> {
+        let r = self.estatico_texto("steamJogos", &[])?;
+        if r == "DESLIGADO" {
+            Ok(None)
+        } else if let Some(e) = r.strip_prefix("ERRO:") {
+            Err(e.to_string())
+        } else {
+            Ok(Some(r))
         }
     }
 

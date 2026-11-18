@@ -15,7 +15,7 @@ use super::telas::{botao, entrada};
 use super::tema::{alfa, fonte, misturar_cor, txt, Peso};
 use super::*;
 use crate::plataforma::{agora_ms, EstadoConta};
-use crate::ranking::{self, ItemRanking, ModoRanking, PeriodoRanking};
+use crate::ranking::{self, ItemRanking, ModoRanking, PeriodoRanking, PlataformaRanking};
 
 const INTERVALO: Duration = Duration::from_secs(60);
 
@@ -51,7 +51,13 @@ impl AbyssHubApp {
             ModoRanking::PorJogo => self.lb_jogo.clone()?,
             _ => String::new(),
         };
-        Some(format!("{}|{}|{}", self.lb_modo.chave(), self.lb_periodo.chave(), jogo))
+        Some(format!(
+            "{}|{}|{}|{}",
+            self.lb_modo.chave(),
+            self.lb_periodo.chave(),
+            self.lb_plataforma.chave(),
+            jogo
+        ))
     }
 
     /// Jogos para escolher no modo "Por jogo": os seus primeiro, depois os que aparecem no ranking.
@@ -78,38 +84,57 @@ impl AbyssHubApp {
         v
     }
 
-    /// O JSON com o seu tempo (só o que conta como jogo, com os repetidos juntados).
+    /// O JSON com o seu tempo (só o que conta como jogo, com os repetidos juntados),
+    /// separado por período e por plataforma (celular / Steam).
     fn json_publicacao(&self) -> String {
-        let mut sess: Vec<Sessao> = self
+        let conta = |c: &str| c != self.proprio && self.eh_jogo(c);
+        let mut sess: Vec<ranking::SessaoPub> = self
             .dados
             .sessoes
             .iter()
-            .filter(|s| {
-                let c = self.canonico(&s.pacote);
-                c != self.proprio && self.eh_jogo(c)
-            })
-            .map(|s| Sessao {
-                pacote: self.canonico(&s.pacote).to_string(),
-                inicio: s.inicio,
-                fim: s.fim,
+            .filter(|s| conta(self.canonico(&s.pacote)))
+            .map(|s| ranking::SessaoPub {
+                sessao: Sessao {
+                    pacote: self.canonico(&s.pacote).to_string(),
+                    inicio: s.inicio,
+                    fim: s.fim,
+                },
+                steam: crate::steam::eh_steam(&s.pacote),
             })
             .collect();
         if let Some((p, ini)) = &self.aberta {
             let c = self.canonico(p);
-            if c != self.proprio && self.eh_jogo(c) {
-                sess.push(Sessao {
-                    pacote: c.to_string(),
-                    inicio: *ini,
-                    fim: agora_ms(),
+            if conta(c) {
+                sess.push(ranking::SessaoPub {
+                    sessao: Sessao {
+                        pacote: c.to_string(),
+                        inicio: *ini,
+                        fim: agora_ms(),
+                    },
+                    steam: false,
                 });
             }
         }
+        let bases: Vec<(String, i64)> = self
+            .dados
+            .steam
+            .jogos
+            .iter()
+            .map(|(id, j)| (self.canonico(&crate::steam::pacote(id)).to_string(), j.base_ms))
+            .filter(|(c, ms)| *ms > 0 && conta(c.as_str()))
+            .collect();
+        let iv = ranking::Intervalos {
+            agora: agora_ms(),
+            hoje: inicio_do_dia(0),
+            semana: inicio_do_dia(6),
+            mes: inicio_do_dia(29),
+        };
         ranking::montar_publicacao(
             &sess,
+            &bases,
             |p| self.nome(p),
-            agora_ms(),
-            inicio_do_dia(0),
-            inicio_do_dia(6),
+            |p| self.plataformas_de(p),
+            &iv,
             &chave_dia(),
         )
     }
@@ -166,6 +191,7 @@ impl AbyssHubApp {
                 c,
                 self.lb_modo.chave().to_string(),
                 self.lb_periodo.chave().to_string(),
+                self.lb_plataforma.chave().to_string(),
                 self.lb_jogo.clone().unwrap_or_default(),
                 chave_dia(),
             ))
@@ -181,7 +207,7 @@ impl AbyssHubApp {
             let publicado = json_pub.map(|j| plat.publicar(&j));
             let itens = consulta
                 .as_ref()
-                .map(|(_, m, p, j, d)| plat.buscar_ranking(m, p, j, d).and_then(|t| ranking::ler_itens(&t)));
+                .map(|(_, m, p, pl, j, d)| plat.buscar_ranking(m, p, pl, j, d).and_then(|t| ranking::ler_itens(&t)));
             let _ = tx.send(Resposta {
                 chave: consulta.map(|c| c.0),
                 itens,
@@ -239,6 +265,29 @@ impl AbyssHubApp {
         }
     }
 
+    /// Símbolo de onde o jogo existe (celular e/ou Steam), com o canto de cima à direita em `canto`.
+    /// Se o jogo está nas duas, aparecem os dois menores, um do lado do outro.
+    fn selo_plataformas(&self, pt: &Painter, plats: &[String], canto: Pos2, escala: f32, a: f32) {
+        let mut lista = Vec::new();
+        if plats.iter().any(|p| p == "mobile") {
+            lista.push(Icone::Celular);
+        }
+        if plats.iter().any(|p| p == "steam") {
+            lista.push(Icone::Pc);
+        }
+        if lista.is_empty() || a <= 0.0 {
+            return;
+        }
+        let tam = escala * if lista.len() == 2 { 16.0 } else { 19.0 };
+        let mut x = canto.x;
+        for qual in lista.into_iter().rev() {
+            let r = Rect::from_min_size(pos2(x - tam, canto.y), Vec2::splat(tam));
+            pt.rect_filled(r, CornerRadius::same(5), alfa(self.p.chip, a));
+            desenho::icone(pt, qual, r.center(), tam * 0.68, alfa(self.p.muted, a), 0.0);
+            x -= tam + 3.0;
+        }
+    }
+
     /// Ícone do jogo ocupando um espaço no layout.
     pub(super) fn icone_jogo(&mut self, ui: &mut Ui, pacote: &str, nome: &str, tam: f32) {
         let (r, _) = ui.allocate_exact_size(Vec2::splat(tam), Sense::hover());
@@ -276,6 +325,12 @@ impl AbyssHubApp {
                 s.sub_hero(ui, "Veja quem mais jogou e mostre o seu tempo de jogo.");
                 return;
             }
+            let mut pl = s.lb_plataforma.indice();
+            if desenho::seletor(ui, &mut s.an, &s.p, "lb_plat", &PlataformaRanking::NOMES, &mut pl, true) {
+                s.lb_plataforma = PlataformaRanking::de(pl);
+                s.inicio_dados = s.an.agora;
+            }
+            ui.add_space(4.0);
             let mut m = s.lb_modo.indice();
             if desenho::seletor(ui, &mut s.an, &s.p, "lb_modo", &ModoRanking::NOMES, &mut m, true) {
                 s.lb_modo = ModoRanking::de(m);
@@ -288,7 +343,11 @@ impl AbyssHubApp {
                 s.inicio_dados = s.an.agora;
             }
             ui.add_space(12.0);
-            s.rotulo_hero(ui, &format!("Sua posição · {}", s.lb_periodo.nome()));
+            let filtro = match s.lb_plataforma {
+                PlataformaRanking::Todas => s.lb_periodo.nome().to_string(),
+                pl => format!("{} · {}", s.lb_periodo.nome(), pl.nome()),
+            };
+            s.rotulo_hero(ui, &format!("Sua posição · {filtro}"));
             let pos = match minha {
                 Some(i) => format!("#{}", i + 1),
                 None => "—".into(),
@@ -592,6 +651,9 @@ impl AbyssHubApp {
                 a(if eu { self.p.gold } else { self.p.text }),
             );
 
+            // onde o jogo existe (celular / Steam), no canto de cima à direita da coluna
+            self.selo_plataformas(&pt, &it.plats, pos2(x0 + w - 6.0, r.top() + 2.0), 1.0, aparece);
+
             // foto com anel da medalha
             let raio = if pos == 0 { 32.0 } else { 26.0 };
             let c = pos2(cx, base - 64.0 - raio + 8.0 * (1.0 - aparece));
@@ -693,7 +755,16 @@ impl AbyssHubApp {
                             });
                         },
                     );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // tempo, com o símbolo da plataforma (celular / Steam) em cima, à direita
+                    ui.with_layout(Layout::top_down(Align::Max), |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        if !it.plats.is_empty() {
+                            let (rb, _) = ui.allocate_exact_size(vec2(40.0, 15.0), Sense::hover());
+                            let pt = ui.painter().clone();
+                            self.selo_plataformas(&pt, &it.plats, rb.right_top(), 0.8, 1.0);
+                        } else {
+                            ui.add_space(8.0);
+                        }
                         ui.label(txt(fmt_duracao(it.ms), 15.5, Peso::Pesado, p.text));
                     });
                 })

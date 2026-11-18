@@ -5,7 +5,7 @@
 <h1 align="center">AbyssHub</h1>
 
 <p align="center">
-  Veja <b>quanto tempo você joga</b> cada jogo no celular e dispute com outros jogadores no <b>Leaderboard</b>.
+  Veja <b>quanto tempo você joga</b> cada jogo no celular e na <b>Steam</b> e dispute com outros jogadores no <b>Leaderboard</b>.
 </p>
 
 <p align="center">
@@ -44,12 +44,14 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 - Tela de cada jogo com total, média por sessão, sessão mais longa, gráfico da semana e todas as sessões
 - Os jogos são reconhecidos sozinhos; dá para marcar ou desmarcar qualquer app como jogo
 - O mesmo jogo instalado de lojas diferentes (ex.: Play Store e Galaxy Store) conta como um só
+- **Jogos da Steam** (PC) junto com os do celular: conecte a sua conta nas configurações
 
 ### Leaderboard
 
 - Veja **quem mais jogou**, com foto, nome, jogo e tempo
 - Três jeitos de ver: **por pessoa** (com o jogo que ela mais jogou), **por pessoa + jogo** e **por jogo**
-- Períodos: **Semana** (padrão), **Hoje** e **Tudo**
+- Períodos: **Hoje**, **Semana** (padrão), **Mês** e **Tudo**
+- Filtro de plataforma: **Todas**, **Mobile** ou **Steam**, com um símbolo mostrando de onde é cada jogo
 - Pódio com os 3 primeiros e a sua posição destacada
 - **Atualiza sozinho a cada minuto**
 - Entre com **Google** ou com **e-mail e senha** (e dá para conectar os dois na mesma conta); só aparece no ranking quem entrou
@@ -83,7 +85,7 @@ Depois disso, as próximas versões chegam pelo próprio app.
 |---|---|
 | **Acesso ao uso** | Saber quando cada app foi aberto e fechado. É assim que o tempo de jogo é contado. Você libera nas configurações do Android. |
 | **Ver apps instalados** | Mostrar o nome e o ícone de cada jogo e reconhecer quais apps são jogos. |
-| **Internet** | Leaderboard, fotos e procurar atualizações. |
+| **Internet** | Leaderboard, fotos, horas da Steam (se você conectar) e procurar atualizações. |
 | **Instalar apps** | Instalar as atualizações do próprio AbyssHub (o Android sempre pede a sua confirmação). |
 
 ## Privacidade
@@ -94,6 +96,12 @@ Depois disso, as próximas versões chegam pelo próprio app.
 - O app não tem anúncios e não usa rastreadores.
 
 ## Perguntas frequentes
+
+**Como conecto a Steam?**
+Em Configurações > **Steam**, toque em **Conectar Steam**. O app pede duas coisas: o link do seu perfil da Steam e uma **chave da Steam Web API**, que você gera de graça em [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) (em "Nome de domínio" pode escrever qualquer coisa, como `abysshub`). Na Steam, deixe **Detalhes do jogo** como **Público** em Privacidade. A chave fica guardada só no seu celular e nunca vai para o Leaderboard.
+
+**Por que as horas da Steam de hoje e da semana começam do zero?**
+A Steam só informa o total de horas de cada jogo, não quando você jogou. Por isso as horas que você já tinha contam em "Tudo", e Hoje, Semana e Mês contam o que você jogar a partir do dia em que conectou.
 
 **Por que o tempo de um jogo não apareceu?**
 O Android guarda o histórico de uso só por alguns dias. Abra o AbyssHub pelo menos uma vez por semana para nenhum tempo se perder. Se o app não reconheceu algo como jogo, marque em **Configurações > O que conta como jogo**.

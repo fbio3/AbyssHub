@@ -145,6 +145,10 @@ pub enum Icone {
     Voltar,
     Relogio,
     Trofeu,
+    /// Celular (jogos do celular)
+    Celular,
+    /// Monitor (jogos da Steam / PC)
+    Pc,
 }
 
 pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f32) {
@@ -249,6 +253,21 @@ pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f3
             ));
             p.line_segment([pt(0.0, 3.0), pt(0.0, 7.0)], st);
             p.line_segment([pt(-4.5, 8.5), pt(4.5, 8.5)], st);
+        }
+        Icone::Celular => {
+            p.add(Shape::closed_line(
+                vec![pt(-5.5, -9.5), pt(5.5, -9.5), pt(5.5, 9.5), pt(-5.5, 9.5)],
+                st,
+            ));
+            p.circle_filled(pt(0.0, 6.0), 1.4 * s, cor);
+        }
+        Icone::Pc => {
+            p.add(Shape::closed_line(
+                vec![pt(-10.0, -8.0), pt(10.0, -8.0), pt(10.0, 4.5), pt(-10.0, 4.5)],
+                st,
+            ));
+            p.line_segment([pt(0.0, 4.5), pt(0.0, 8.5)], st);
+            p.line_segment([pt(-5.0, 9.0), pt(5.0, 9.0)], st);
         }
         Icone::Relogio => {
             p.circle_stroke(c, 8.5 * s, st);

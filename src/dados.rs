@@ -48,6 +48,9 @@ pub struct Dados {
     /// Atualização automática (última versão vista, "agora não"...).
     #[serde(default)]
     pub atualizacao: crate::atualizacao::EstadoSalvo,
+    /// Jogos da Steam (a chave da Steam fica só no Android, não aqui).
+    #[serde(default)]
+    pub steam: crate::steam::SteamDados,
 }
 
 fn verdadeiro() -> bool {
@@ -68,6 +71,7 @@ impl Default for Dados {
             tema: 0,
             animacoes: true,
             atualizacao: Default::default(),
+            steam: Default::default(),
         }
     }
 }

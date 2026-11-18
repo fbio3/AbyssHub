@@ -58,6 +58,7 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldPath;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.QuerySnapshot;
@@ -74,7 +75,10 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -94,6 +98,8 @@ public class MainActivity extends NativeActivity {
     private static final long SEMANA_MS = 7L * 24 * 60 * 60 * 1000;
 
     static volatile MainActivity ativa;
+    /** Contexto do app (continua valendo mesmo se a tela for recriada). */
+    private static volatile Context contexto;
     /** "saiu", "entrando" ou "erro" (logado vem do próprio FirebaseAuth) */
     private static volatile String estado = "saiu";
     private static volatile String mensagem = "";
@@ -103,6 +109,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         ativa = this;
+        contexto = getApplicationContext();
         super.onCreate(savedInstanceState);
     }
 
@@ -701,6 +708,272 @@ public class MainActivity extends NativeActivity {
         return e == null ? "Erro desconhecido." : mensagemDe(e);
     }
 
+
+    // =================================================================
+    // Steam — cada pessoa usa a própria chave da Steam Web API.
+    // A chave fica só neste celular (SharedPreferences "abysshub_steam"), nunca vai ao Firebase.
+    // =================================================================
+
+    private static final String STEAM_API = "https://api.steampowered.com";
+    private static final String STEAM_CHAVE_URL = "https://steamcommunity.com/dev/apikey";
+
+    /** "" = ver as preferências; "conectando"; "erro" (com steamMsg). */
+    private static volatile String steamEstado = "";
+    private static volatile String steamMsg = "";
+
+    private static SharedPreferences prefsSteam() {
+        Context c = contexto;
+        return c == null ? null : c.getSharedPreferences("abysshub_steam", MODE_PRIVATE);
+    }
+
+    /** {"estado": "desligado"|"conectando"|"ok"|"erro", "msg", "nome"} */
+    public static String steamEstado() {
+        try {
+            JSONObject o = new JSONObject();
+            SharedPreferences p = prefsSteam();
+            boolean conectado = p != null && !p.getString("id", "").isEmpty() && !p.getString("chave", "").isEmpty();
+            String e = steamEstado;
+            if (e.equals("conectando")) o.put("estado", "conectando");
+            else if (e.equals("erro")) o.put("estado", "erro");
+            else o.put("estado", conectado ? "ok" : "desligado");
+            o.put("msg", steamMsg);
+            o.put("nome", p == null ? "" : p.getString("nome", ""));
+            return o.toString();
+        } catch (Throwable t) {
+            return "{\"estado\":\"desligado\"}";
+        }
+    }
+
+    public static void steamDesconectar() {
+        SharedPreferences p = prefsSteam();
+        if (p != null) p.edit().clear().apply();
+        steamEstado = "";
+        steamMsg = "";
+    }
+
+    public static void steamConectar() {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(a::dialogoSteam);
+    }
+
+    private void dialogoSteam() {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(22), dp(8), dp(22), 0);
+        TextView passos = new TextView(this);
+        passos.setText("1. Toque em \"Pegar minha chave\" e entre na sua conta Steam. Em \"Nome de domínio\" "
+                + "escreva qualquer coisa (por exemplo: abysshub), aceite os termos e copie a chave.\n"
+                + "2. Cole a chave aqui embaixo.\n"
+                + "3. Cole o link do seu perfil da Steam (ou o seu ID).\n\n"
+                + "Na Steam, em Perfil > Editar perfil > Privacidade, deixe \"Detalhes do jogo\" como Público.\n"
+                + "A chave fica guardada só neste celular.");
+        passos.setTextSize(13);
+        passos.setPadding(0, 0, 0, dp(8));
+        l.addView(passos);
+        SharedPreferences p = prefsSteam();
+        final EditText perfil = campo("Link do perfil ou ID da Steam", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        final EditText chave = campo("Chave da Steam (32 letras e números)",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        if (p != null) {
+            perfil.setText(p.getString("perfil", ""));
+            chave.setText(p.getString("chave", ""));
+        }
+        l.addView(perfil);
+        l.addView(chave);
+
+        AlertDialog d = new AlertDialog.Builder(this, temaDialogo())
+                .setTitle("Conectar Steam")
+                .setView(l)
+                .setPositiveButton("Conectar", null)
+                .setNeutralButton("Pegar minha chave", null)
+                .setNegativeButton("Cancelar", null)
+                .create();
+        d.setOnShowListener(x -> {
+            d.getButton(DialogInterface.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(STEAM_CHAVE_URL)));
+                } catch (Throwable t) {
+                    Toast.makeText(this, "Abra " + STEAM_CHAVE_URL + " no navegador", Toast.LENGTH_LONG).show();
+                }
+            });
+            d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String pf = perfil.getText().toString().trim();
+                String ch = chave.getText().toString().trim().replace(" ", "");
+                if (pf.isEmpty()) { perfil.setError("Cole o link do seu perfil"); return; }
+                if (!ch.matches("[0-9A-Fa-f]{32}")) { chave.setError("A chave tem 32 letras e números"); return; }
+                d.dismiss();
+                steamEstado = "conectando";
+                steamMsg = "";
+                new Thread(() -> validarSteam(pf, ch)).start();
+            });
+        });
+        d.show();
+    }
+
+    /** Confere o perfil e a chave e, se der certo, guarda. Roda numa thread. */
+    private static void validarSteam(String perfil, String chave) {
+        try {
+            String id = resolverSteamId(perfil, chave);
+            JSONObject resp = donoDosJogos(id, chave);
+            int n = resp.optInt("game_count", 0);
+            String nome = "";
+            try {
+                JSONObject r = new JSONObject(httpTexto(STEAM_API + "/ISteamUser/GetPlayerSummaries/v2/?key="
+                        + chave + "&steamids=" + id));
+                JSONArray ps = r.getJSONObject("response").optJSONArray("players");
+                if (ps != null && ps.length() > 0) nome = ps.getJSONObject(0).optString("personaname");
+            } catch (Throwable ignorar) { }
+            SharedPreferences p = prefsSteam();
+            if (p == null) throw new Exception("O app foi fechado");
+            p.edit().putString("perfil", perfil).putString("chave", chave)
+                    .putString("id", id).putString("nome", nome).apply();
+            steamMsg = "";
+            steamEstado = "";
+            Log.i(TAG, "Steam conectada: " + n + " jogos");
+        } catch (Throwable t) {
+            steamMsg = mensagemDe(t);
+            steamEstado = "erro";
+            avisar(steamMsg);
+        }
+    }
+
+    /** Aceita link /profiles/123..., link /id/nome, o ID de 17 dígitos ou só o nome personalizado. */
+    private static String resolverSteamId(String entrada, String chave) throws Exception {
+        String e = entrada.trim();
+        int i = e.indexOf("/profiles/");
+        if (i >= 0) {
+            String resto = e.substring(i + 10).replaceAll("[^0-9].*$", "");
+            if (resto.matches("\\d{17}")) return resto;
+        }
+        if (e.matches("\\d{17}")) return e;
+        String nome = e;
+        i = e.indexOf("/id/");
+        if (i >= 0) nome = e.substring(i + 4);
+        nome = nome.replaceAll("[/?#].*$", "");
+        if (nome.isEmpty()) throw new Exception("Não entendi esse link de perfil da Steam.");
+        JSONObject r = new JSONObject(httpTexto(STEAM_API + "/ISteamUser/ResolveVanityURL/v1/?key=" + chave
+                + "&vanityurl=" + Uri.encode(nome))).getJSONObject("response");
+        if (r.optInt("success") != 1) throw new Exception("Não achei esse perfil da Steam. Confira o link.");
+        return r.getString("steamid");
+    }
+
+    /** O "response" do GetOwnedGames. Dá erro se o perfil estiver privado. */
+    private static JSONObject donoDosJogos(String id, String chave) throws Exception {
+        JSONObject r = new JSONObject(httpTexto(STEAM_API + "/IPlayerService/GetOwnedGames/v1/?key=" + chave
+                + "&steamid=" + id + "&include_appinfo=1&include_played_free_games=1&format=json"))
+                .optJSONObject("response");
+        if (r == null || !r.has("game_count")) {
+            throw new Exception("Os jogos desse perfil estão privados. Na Steam, em Privacidade, deixe \"Detalhes do jogo\" como Público.");
+        }
+        return r;
+    }
+
+    /** Lista os jogos com tempo: {"id", "jogos": [{appid, nome, min, ultima}]}, "DESLIGADO" ou "ERRO:msg". */
+    public static String steamJogos() {
+        SharedPreferences p = prefsSteam();
+        if (p == null) return "ERRO:O app ainda está abrindo";
+        String id = p.getString("id", ""), chave = p.getString("chave", "");
+        if (id.isEmpty() || chave.isEmpty()) return "DESLIGADO";
+        try {
+            JSONArray jogos = donoDosJogos(id, chave).optJSONArray("games");
+            JSONArray saida = new JSONArray();
+            JSONObject icones = new JSONObject(p.getString("icones", "{}"));
+            if (jogos != null) {
+                for (int i = 0; i < jogos.length(); i++) {
+                    JSONObject g = jogos.getJSONObject(i);
+                    long min = g.optLong("playtime_forever");
+                    if (min <= 0) continue;
+                    String appid = String.valueOf(g.optLong("appid"));
+                    JSONObject o = new JSONObject();
+                    o.put("appid", appid);
+                    o.put("nome", g.optString("name"));
+                    o.put("min", min);
+                    o.put("ultima", g.optLong("rtime_last_played"));
+                    saida.put(o);
+                    String hash = g.optString("img_icon_url");
+                    if (!hash.isEmpty()) icones.put(appid, hash);
+                }
+            }
+            p.edit().putString("icones", icones.toString()).apply();
+            JSONObject r = new JSONObject();
+            r.put("id", id);
+            r.put("jogos", saida);
+            return r.toString();
+        } catch (Throwable t) {
+            return "ERRO:Steam: " + mensagemDe(t);
+        }
+    }
+
+    /** Arte do jogo da Steam ("steam:{appid}"): capa da biblioteca, cabeçalho ou o ícone pequeno. */
+    private static Bitmap bitmapSteam(String pacote) {
+        String appid = pacote.substring("steam:".length());
+        if (!appid.matches("\\d+")) return null;
+        String[] urls = {
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/" + appid + "/library_600x900.jpg",
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/" + appid + "/header.jpg",
+                null,
+        };
+        SharedPreferences p = prefsSteam();
+        if (p != null) {
+            try {
+                String hash = new JSONObject(p.getString("icones", "{}")).optString(appid);
+                if (!hash.isEmpty()) {
+                    urls[2] = "https://media.steampowered.com/steamcommunity/public/images/apps/" + appid + "/" + hash + ".jpg";
+                }
+            } catch (Throwable ignorar) { }
+        }
+        for (String u : urls) {
+            if (u == null) continue;
+            Bitmap b = baixarBitmap(u);
+            if (b != null) return b;
+        }
+        return null;
+    }
+
+    private static Bitmap baixarBitmap(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(10000);
+            if (c.getResponseCode() != 200) return null;
+            try (InputStream in = c.getInputStream()) {
+                return BitmapFactory.decodeStream(in);
+            }
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /** GET que devolve o texto da resposta. A chave nunca aparece nas mensagens de erro. */
+    private static String httpTexto(String url) throws Exception {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestProperty("User-Agent", "AbyssHub");
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(20000);
+            int codigo = c.getResponseCode();
+            if (codigo == 401 || codigo == 403) throw new Exception("A Steam recusou a chave. Confira se copiou a chave certa.");
+            if (codigo == 429) throw new Exception("A Steam pediu para esperar um pouco. Tente de novo daqui a alguns minutos.");
+            if (codigo != 200) throw new Exception("A Steam respondeu com erro " + codigo + ".");
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            try (InputStream in = c.getInputStream()) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            }
+            return b.toString("UTF-8");
+        } catch (java.net.UnknownHostException e) {
+            throw new Exception("Sem internet para falar com a Steam.");
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     // =================================================================
     // Atualizações (GitHub Releases), igual ao AbyssSub
     // =================================================================
@@ -872,6 +1145,9 @@ public class MainActivity extends NativeActivity {
                 pessoa.put(per + "_top_pacote", top != null ? top.optString("pacote") : "");
                 pessoa.put(per + "_top_nome", top != null ? top.optString("nome") : "");
             }
+            // tempo por período e plataforma ("semana_steam", "hoje_2026-11-18_todas"...) e o jogo top de cada um
+            pessoa.put("r", mapa(p.optJSONObject("r")));
+            pessoa.put("top", mapa(p.optJSONObject("top")));
             b.set(db.collection(PESSOAS).document(uid), pessoa);
 
             JSONArray jogos = p.optJSONArray("jogos");
@@ -895,6 +1171,13 @@ public class MainActivity extends NativeActivity {
                     par.put("hoje_ms", j.optLong("hoje_ms"));
                     par.put("semana_ms", j.optLong("semana_ms"));
                     par.put("tudo_ms", j.optLong("tudo_ms"));
+                    Map<String, Object> r = mapa(j.optJSONObject("r"));
+                    par.put("r", r);
+                    // o mesmo tempo dentro de "j.{chave}" — assim o modo "Por jogo" não precisa de índice
+                    Map<String, Object> porJogo = new HashMap<>();
+                    porJogo.put(chave, r);
+                    par.put("j", porJogo);
+                    par.put("plats", lista(j.optJSONArray("plats")));
                     b.set(db.collection(PARES).document(uid + "__" + chave), par);
                     meus.add(uid + "__" + chave);
                 }
@@ -964,29 +1247,40 @@ public class MainActivity extends NativeActivity {
         prefs.edit().putStringSet("icones", enviados).apply();
     }
 
+    private static final long MES_MS = 30L * 24 * 60 * 60 * 1000;
+
+    /** Mesmo nome de campo de ranking::campo no Rust. */
+    private static String campoRanking(String periodo, String plataforma, String dia) {
+        return (periodo.equals("hoje") ? "hoje_" + dia : periodo) + "_" + plataforma;
+    }
+
     /**
-     * modo: "pessoas" | "pares" | "jogo"; periodo: "hoje" | "semana" | "tudo".
+     * modo: "pessoas" | "pares" | "jogo"; periodo: "hoje" | "semana" | "mes" | "tudo";
+     * plataforma: "todas" | "mobile" | "steam"; chave: a chave do jogo (modo "jogo").
      * Devolve um JSON (lista) ou "ERRO:mensagem".
      */
-    public static String buscar(String modo, String periodo, String pacote, String dia) {
+    public static String buscar(String modo, String periodo, String plataforma, String chave, String dia) {
         try {
             if (FirebaseAuth.getInstance().getCurrentUser() == null) return "ERRO:Sem conta";
             FirebaseFirestore db = FirebaseFirestore.getInstance();
-            String campo = periodo + "_ms";
-            Query q = db.collection(modo.equals("pessoas") ? PESSOAS : PARES);
-            if (modo.equals("jogo")) q = q.whereEqualTo("chave", pacote); // aqui "pacote" é a chave do jogo
-            if (periodo.equals("hoje")) q = q.whereEqualTo("dia", dia);
-            q = q.orderBy(campo, Query.Direction.DESCENDING).limit(60);
+            String campo = campoRanking(periodo, plataforma, dia);
+            // Só aparece quem tem esse campo: ordenar por um campo dentro de um mapa usa o índice
+            // automático do Firestore (não precisa criar índice composto).
+            FieldPath fp = modo.equals("jogo") ? FieldPath.of("j", chave, campo) : FieldPath.of("r", campo);
+            Query q = db.collection(modo.equals("pessoas") ? PESSOAS : PARES)
+                    .orderBy(fp, Query.Direction.DESCENDING).limit(60);
             QuerySnapshot snap = Tasks.await(q.get(), 20, TimeUnit.SECONDS);
 
             long agora = System.currentTimeMillis();
             JSONArray saida = new JSONArray();
             for (DocumentSnapshot d : snap.getDocuments()) {
-                long ms = numero(d, campo);
+                Object v = d.get(fp);
+                long ms = v instanceof Number ? ((Number) v).longValue() : 0L;
                 long atualizado = numero(d, "atualizado_ms");
                 if (ms <= 0) continue;
-                // quem não abre o app há mais de 7 dias não conta na semana
+                // quem não abre o app há mais de 7 (ou 30) dias não conta na semana (ou no mês)
                 if (periodo.equals("semana") && agora - atualizado > SEMANA_MS) continue;
+                if (periodo.equals("mes") && agora - atualizado > MES_MS) continue;
                 JSONObject o = new JSONObject();
                 o.put("uid", texto(d, "uid"));
                 o.put("nome", texto(d, "nome"));
@@ -994,12 +1288,19 @@ public class MainActivity extends NativeActivity {
                 o.put("ms", ms);
                 o.put("atualizado_ms", atualizado);
                 if (modo.equals("pessoas")) {
-                    o.put("pacote", texto(d, periodo + "_top_pacote"));
-                    o.put("jogo", texto(d, periodo + "_top_nome"));
+                    Object t = d.get(FieldPath.of("top", campo));
+                    if (t instanceof Map) {
+                        Map<?, ?> top = (Map<?, ?>) t;
+                        o.put("pacote", textoDe(top.get("pacote")));
+                        o.put("jogo", textoDe(top.get("nome")));
+                        o.put("chave", textoDe(top.get("chave")));
+                        o.put("plats", listaJson(top.get("plats")));
+                    }
                 } else {
                     o.put("pacote", texto(d, "pacote"));
                     o.put("jogo", texto(d, "jogo"));
                     o.put("chave", texto(d, "chave"));
+                    o.put("plats", listaJson(d.get("plats")));
                 }
                 saida.put(o);
                 if (saida.length() >= 50) break;
@@ -1008,6 +1309,43 @@ public class MainActivity extends NativeActivity {
         } catch (Throwable t) {
             return "ERRO:" + mensagemDe(t);
         }
+    }
+
+    /** JSONObject -> Map (para gravar no Firestore). */
+    private static Map<String, Object> mapa(JSONObject o) throws Exception {
+        Map<String, Object> m = new HashMap<>();
+        if (o == null) return m;
+        Iterator<String> k = o.keys();
+        while (k.hasNext()) {
+            String n = k.next();
+            Object v = o.get(n);
+            if (v instanceof JSONObject) m.put(n, mapa((JSONObject) v));
+            else if (v instanceof JSONArray) m.put(n, lista((JSONArray) v));
+            else if (v != JSONObject.NULL) m.put(n, v);
+        }
+        return m;
+    }
+
+    private static List<Object> lista(JSONArray a) throws Exception {
+        List<Object> l = new ArrayList<>();
+        if (a == null) return l;
+        for (int i = 0; i < a.length(); i++) {
+            Object v = a.get(i);
+            if (v instanceof JSONObject) l.add(mapa((JSONObject) v));
+            else if (v instanceof JSONArray) l.add(lista((JSONArray) v));
+            else if (v != JSONObject.NULL) l.add(v);
+        }
+        return l;
+    }
+
+    private static JSONArray listaJson(Object o) {
+        JSONArray a = new JSONArray();
+        if (o instanceof List) for (Object x : (List<?>) o) if (x instanceof String) a.put(x);
+        return a;
+    }
+
+    private static String textoDe(Object o) {
+        return o instanceof String ? (String) o : "";
     }
 
     /** Tira a pessoa do Leaderboard. Devolve "" se deu certo. */
@@ -1107,6 +1445,10 @@ public class MainActivity extends NativeActivity {
     }
 
     private static Bitmap bitmapDoIcone(String pacote, int tam) {
+        if (pacote.startsWith("steam:")) {
+            Bitmap b = bitmapSteam(pacote);
+            return b == null ? null : quadrado(b, tam);
+        }
         MainActivity a = ativa;
         if (a == null) return null;
         try {
@@ -1136,13 +1478,19 @@ public class MainActivity extends NativeActivity {
         return Base64.encodeToString(s.toByteArray(), Base64.NO_WRAP);
     }
 
-    /** Recorta no meio, redimensiona e devolve os bytes RGBA. */
-    private static byte[] paraRgba(Bitmap origem, int tam) {
+    /** Recorta um quadrado no meio e redimensiona para tam x tam. */
+    private static Bitmap quadrado(Bitmap origem, int tam) {
         Bitmap b = Bitmap.createBitmap(tam, tam, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(b);
         int w = origem.getWidth(), h = origem.getHeight(), lado = Math.min(w, h);
         Rect src = new Rect((w - lado) / 2, (h - lado) / 2, (w - lado) / 2 + lado, (h - lado) / 2 + lado);
         c.drawBitmap(origem, src, new Rect(0, 0, tam, tam), new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG));
+        return b;
+    }
+
+    /** Recorta no meio, redimensiona e devolve os bytes RGBA. */
+    private static byte[] paraRgba(Bitmap origem, int tam) {
+        Bitmap b = quadrado(origem, tam);
         ByteBuffer buf = ByteBuffer.allocate(tam * tam * 4);
         b.copyPixelsToBuffer(buf);
         return buf.array();

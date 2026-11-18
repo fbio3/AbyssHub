@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma};
+use super::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma, SteamEstado};
 use crate::sessoes::{Evento, PAUSA, RETOMADA};
 
 const APPS: [(&str, &str, bool); 5] = [
@@ -21,13 +21,24 @@ pub struct PlataformaDesktop {
     pasta: PathBuf,
     /// formas de entrar da conta de teste (vazio = não está logado)
     logado: Mutex<Vec<String>>,
+    /// Steam de teste conectada
+    steam: Mutex<bool>,
 }
+
+/// Jogos da Steam de teste: (appid, nome, minutos). "Abyss Knight" também existe no "celular",
+/// para testar o jogo que está nas duas plataformas.
+const STEAM: [(&str, &str, i64); 3] = [
+    ("730", "Counter-Strike 2", 5400),
+    ("105600", "Terraria", 2300),
+    ("999001", "Abyss Knight", 300),
+];
 
 impl PlataformaDesktop {
     pub fn nova() -> Self {
         PlataformaDesktop {
             pasta: PathBuf::from("dados-teste"),
             logado: Mutex::new(Vec::new()),
+            steam: Mutex::new(false),
         }
     }
 }
@@ -155,7 +166,56 @@ impl Plataforma for PlataformaDesktop {
         Ok(())
     }
 
-    fn buscar_ranking(&self, modo: &str, periodo: &str, pacote: &str, _dia: &str) -> Result<String, String> {
+    fn steam_estado(&self) -> SteamEstado {
+        if *self.steam.lock().unwrap() {
+            SteamEstado {
+                estado: "ok".into(),
+                msg: String::new(),
+                nome: "Você (Steam de teste)".into(),
+            }
+        } else {
+            SteamEstado {
+                estado: "desligado".into(),
+                ..Default::default()
+            }
+        }
+    }
+
+    fn steam_conectar(&self) {
+        *self.steam.lock().unwrap() = true;
+    }
+
+    fn steam_desconectar(&self) {
+        *self.steam.lock().unwrap() = false;
+    }
+
+    fn steam_jogos(&self) -> Result<Option<String>, String> {
+        if !*self.steam.lock().unwrap() {
+            return Ok(None);
+        }
+        // o Terraria "ganha" 1 minuto a cada minuto, para dar para ver o tempo novo aparecer
+        let minuto = agora_ms() / 60_000;
+        let jogos: Vec<serde_json::Value> = STEAM
+            .iter()
+            .map(|(id, nome, min)| {
+                let extra = if *id == "105600" { minuto % 100_000 } else { 0 };
+                serde_json::json!({
+                    "appid": id, "nome": nome, "min": min + extra,
+                    "ultima": agora_ms() / 1000 - 60,
+                })
+            })
+            .collect();
+        Ok(Some(serde_json::json!({ "id": "76561190000000000", "jogos": jogos }).to_string()))
+    }
+
+    fn buscar_ranking(
+        &self,
+        modo: &str,
+        periodo: &str,
+        plataforma: &str,
+        pacote: &str,
+        _dia: &str,
+    ) -> Result<String, String> {
         let pessoas = [
             ("eu", "Você (teste)"),
             ("a", "Riko"),
@@ -170,7 +230,16 @@ impl Plataforma for PlataformaDesktop {
         let fator = match periodo {
             "hoje" => 1,
             "semana" => 6,
+            "mes" => 20,
             _ => 40,
+        };
+        // cada jogo de teste "existe" em: celular, Steam ou nos dois
+        let plats_de = |j: usize| -> Vec<&'static str> {
+            match j {
+                0 => vec!["mobile", "steam"],
+                3 => vec!["steam"],
+                _ => vec!["mobile"],
+            }
         };
         // muda um pouquinho a cada minuto, para dar para ver a atualização
         let minuto = (agora_ms() / 60_000) as i64;
@@ -186,13 +255,24 @@ impl Plataforma for PlataformaDesktop {
                 _ => vec![i % 4],
             };
             for (k, j) in jogos.into_iter().enumerate() {
+                let pl = plats_de(j);
+                if plataforma != "todas" && !pl.iter().any(|p| *p == plataforma) {
+                    continue;
+                }
                 let base = ((9 - i) as i64 * 37 + k as i64 * 11 + (minuto + i as i64) % 7) * 60_000;
-                let ms = base * fator / 3;
+                // jogo nas duas plataformas: 60% do tempo no celular e 40% na Steam
+                let parte = match (plataforma, pl.len()) {
+                    ("mobile", 2) => 60,
+                    ("steam", 2) => 40,
+                    _ => 100,
+                };
+                let ms = base * fator / 3 * parte / 100;
                 itens.push(serde_json::json!({
                     "uid": uid, "nome": nome, "foto": "",
                     "pacote": APPS[j].0, "jogo": APPS[j].1,
                     "chave": crate::ranking::chave_jogo(APPS[j].1, APPS[j].0),
                     "ms": ms, "atualizado_ms": agora_ms() - (i as i64) * 90_000,
+                    "plats": pl,
                 }));
             }
         }

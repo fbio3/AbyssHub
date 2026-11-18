@@ -5,6 +5,7 @@ pub mod dados;
 pub mod plataforma;
 pub mod ranking;
 pub mod sessoes;
+pub mod steam;
 mod ui;
 
 use std::sync::Arc;

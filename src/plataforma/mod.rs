@@ -87,8 +87,15 @@ pub trait Plataforma: Send + Sync {
     fn publicar(&self, _json: &str) -> Result<(), String> {
         Err("Leaderboard indisponível".into())
     }
-    /// Busca o ranking. Devolve uma lista em JSON.
-    fn buscar_ranking(&self, _modo: &str, _periodo: &str, _pacote: &str, _dia: &str) -> Result<String, String> {
+    /// Busca o ranking. `chave` é a chave do jogo (modo "jogo"). Devolve uma lista em JSON.
+    fn buscar_ranking(
+        &self,
+        _modo: &str,
+        _periodo: &str,
+        _plataforma: &str,
+        _chave: &str,
+        _dia: &str,
+    ) -> Result<String, String> {
         Err("Leaderboard indisponível".into())
     }
     fn apagar_meus_dados(&self) -> Result<(), String> {
@@ -111,6 +118,21 @@ pub trait Plataforma: Send + Sync {
     /// Adicionar e-mail e senha à conta atual.
     fn ligar_email(&self) {}
 
+    // ---------- Steam ----------
+
+    /// Situação da conexão com a Steam.
+    fn steam_estado(&self) -> SteamEstado {
+        SteamEstado::default()
+    }
+    /// Abre a janelinha para colar o perfil e a chave da Steam.
+    fn steam_conectar(&self) {}
+    /// Esquece o perfil e a chave da Steam.
+    fn steam_desconectar(&self) {}
+    /// Lê os jogos da Steam (JSON {"id", "jogos": [...]}). None = Steam não conectada.
+    fn steam_jogos(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
     // ---------- Atualização automática (GitHub Releases) ----------
 
     /// JSON da última versão publicada, ou None se ainda não há versões.
@@ -124,6 +146,44 @@ pub trait Plataforma: Send + Sync {
     /// JSON com {"estado", "progresso", "msg"}.
     fn estado_atualizacao(&self) -> String {
         String::new()
+    }
+}
+
+/// Situação da Steam: "indisponivel", "desligado", "conectando", "ok" ou "erro".
+#[derive(Clone, Debug, PartialEq)]
+pub struct SteamEstado {
+    pub estado: String,
+    pub msg: String,
+    /// Nome do perfil da Steam.
+    pub nome: String,
+}
+
+impl Default for SteamEstado {
+    fn default() -> Self {
+        SteamEstado {
+            estado: "indisponivel".into(),
+            msg: String::new(),
+            nome: String::new(),
+        }
+    }
+}
+
+impl SteamEstado {
+    pub fn conectado(&self) -> bool {
+        self.estado == "ok"
+    }
+}
+
+/// Lê o JSON de steamEstado() (MainActivity.java).
+#[allow(dead_code)]
+pub fn ler_steam(json: &str) -> SteamEstado {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let t = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let estado = t("estado");
+    SteamEstado {
+        estado: if estado.is_empty() { "indisponivel".into() } else { estado },
+        msg: t("msg"),
+        nome: t("nome"),
     }
 }
 

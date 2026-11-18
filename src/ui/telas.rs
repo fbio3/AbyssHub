@@ -858,14 +858,17 @@ impl AbyssHubApp {
         let agora = agora_ms();
         let ini = self.periodo.inicio();
         let no_periodo: Vec<&Sessao> = sess.iter().filter(|s| s.fim > ini).collect();
-        let total: i64 = no_periodo
+        let sessoes_total: i64 = no_periodo
             .iter()
             .map(|s| sessoes::tempo_no_intervalo(s, ini, agora))
             .sum();
         let k = no_periodo.len();
-        let media = if k > 0 { total / k as i64 } else { 0 };
+        let media = if k > 0 { sessoes_total / k as i64 } else { 0 };
         let maior = no_periodo.iter().map(|s| s.duracao()).max().unwrap_or(0);
-        let ultima = sess.first().map(|s| s.fim).unwrap_or(0);
+        // jogo da Steam: o tempo de antes de conectar entra em "Tudo"
+        let (base_steam, ultima_steam) = self.base_steam_de(pacote);
+        let total = sessoes_total + if ini <= 0 { base_steam } else { 0 };
+        let ultima = sess.first().map(|s| s.fim).unwrap_or(0).max(ultima_steam);
 
         self.hero(ui, topo, |s, ui| {
             ui.horizontal(|ui| {
@@ -1060,6 +1063,7 @@ impl AbyssHubApp {
                     self.sync_manual = true;
                     self.precisa_apps = true;
                     self.sincronizar();
+                    self.sincronizar_steam(false);
                 }
             });
         if sincronizando {
@@ -1264,6 +1268,8 @@ impl AbyssHubApp {
             }
         });
 
+        self.grupo_steam(ui);
+
         grupo(ui, &p, |ui| {
             ui.label(txt("Aparência", 15.0, Peso::Negrito, p.text));
             ui.label(txt(
@@ -1422,6 +1428,106 @@ impl AbyssHubApp {
             });
         });
         ui.add_space(30.0);
+    }
+}
+
+impl AbyssHubApp {
+    /// Configurações > Steam: conectar com a chave da própria pessoa, ver o estado e desconectar.
+    fn grupo_steam(&mut self, ui: &mut Ui) {
+        let p = self.p;
+        if self.steam.estado == "indisponivel" {
+            return;
+        }
+        grupo(ui, &p, |ui| {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                desenho::icone(ui.painter(), Icone::Pc, r.center(), 22.0, p.text, 0.0);
+                ui.label(txt("Steam (PC)", 15.0, Peso::Negrito, p.text));
+            });
+            match self.steam.estado.as_str() {
+                "ok" => {
+                    let nome = if self.steam.nome.is_empty() {
+                        "sua conta".to_string()
+                    } else {
+                        self.steam.nome.clone()
+                    };
+                    ui.label(txt(format!("Conectado como {nome}"), 14.0, Peso::Semi, p.text));
+                    let n = self.dados.steam.jogos.len();
+                    let quando = if self.rx_steam.is_some() {
+                        "atualizando...".to_string()
+                    } else {
+                        format!("atualizado {}", fmt_relativo(self.dados.steam.ultima_sync))
+                    };
+                    ui.label(txt(
+                        format!("{n} {} com tempo de jogo · {quando}", if n == 1 { "jogo" } else { "jogos" }),
+                        12.5,
+                        Peso::Normal,
+                        p.muted,
+                    ));
+                    ui.label(txt(
+                        "As horas que você já tinha contam em \"Tudo\". Hoje, Semana e Mês contam o que você jogar a partir de agora. Atualiza sozinho a cada 10 minutos com o app aberto.",
+                        12.5,
+                        Peso::Normal,
+                        p.muted,
+                    ));
+                    if let Some(e) = self.steam_erro.clone() {
+                        ui.label(txt(e, 12.5, Peso::Normal, p.bad));
+                    }
+                    let confirmando = self
+                        .steam_confirmar_saida
+                        .is_some_and(|t| self.an.agora - t < 4.0);
+                    let mut sair = false;
+                    ui.columns(2, |c| {
+                        if botao(&mut c[0], &mut self.an, &p, "steam_atualizar", "Atualizar agora", false).clicked() {
+                            self.sincronizar_steam(true);
+                        }
+                        let rotulo = if confirmando { "Toque de novo" } else { "Desconectar" };
+                        if botao(&mut c[1], &mut self.an, &p, "steam_sair", rotulo, false).clicked() {
+                            if confirmando {
+                                sair = true;
+                            } else {
+                                self.steam_confirmar_saida = Some(self.an.agora);
+                            }
+                        }
+                    });
+                    if confirmando {
+                        ui.label(txt(
+                            "Desconectar tira os jogos da Steam do app e do Leaderboard.",
+                            12.0,
+                            Peso::Normal,
+                            p.muted,
+                        ));
+                        self.an.ativo = true;
+                    }
+                    if sair {
+                        self.steam_confirmar_saida = None;
+                        self.desconectar_steam();
+                    }
+                }
+                "conectando" => {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(18.0));
+                        ui.label(txt("Conectando à Steam...", 13.5, Peso::Normal, p.muted));
+                    });
+                }
+                estado => {
+                    ui.label(txt(
+                        "Some as horas dos seus jogos da Steam às do celular. Você usa uma chave grátis da sua própria conta Steam, que fica guardada só neste celular.",
+                        13.0,
+                        Peso::Normal,
+                        p.muted,
+                    ));
+                    if estado == "erro" && !self.steam.msg.is_empty() {
+                        ui.label(txt(&self.steam.msg, 12.5, Peso::Normal, p.bad));
+                    }
+                    let rotulo = if estado == "erro" { "Tentar de novo" } else { "Conectar Steam" };
+                    if botao(ui, &mut self.an, &p, "steam_conectar", rotulo, true).clicked() {
+                        self.plat.steam_conectar();
+                        self.ultimo_check_steam = None;
+                    }
+                }
+            }
+        });
     }
 }
 

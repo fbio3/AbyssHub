@@ -82,11 +82,17 @@ impl AbyssHubApp {
             }
         }
 
-        // procura sozinho uns segundos depois de abrir, no máximo a cada 6 horas
+        // Procura sozinho: toda vez que o app abre (alguns segundos depois) e,
+        // com ele aberto, a cada 6 horas. Se der erro (sem internet), tenta de novo em 10 minutos.
         let aberto_ha = self.boot.map_or(0.0, |b| self.an.agora - b);
-        if !self.upd_tentou && aberto_ha > 3.0 && agora_ms() - self.dados.atualizacao.ultima_verificacao > INTERVALO_MS
-        {
+        let pode_tentar = self
+            .ultima_tentativa_upd
+            .map_or(true, |t| t.elapsed() > Duration::from_secs(600));
+        let ao_abrir = !self.upd_tentou && aberto_ha > 3.0;
+        let passou_6h = agora_ms() - self.dados.atualizacao.ultima_verificacao > INTERVALO_MS;
+        if self.rx_upd.is_none() && (ao_abrir || (passou_6h && pode_tentar)) {
             self.upd_tentou = true;
+            self.ultima_tentativa_upd = Some(Instant::now());
             self.procurar_atualizacao(false);
         }
 

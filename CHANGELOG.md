@@ -1,5 +1,21 @@
 # Mudanças do AbyssHub
 
+## v2.1.0 — Steam
+
+- **Jogos da Steam**: em Configurações > Steam, conecte a sua conta com uma chave grátis da própria Steam (o app mostra o passo a passo). A chave fica guardada só no seu celular.
+- Os jogos da Steam aparecem junto com os do celular, em todas as abas e no Leaderboard. As horas que você já tinha contam em "Tudo"; Hoje, Semana e Mês contam o que você jogar depois de conectar.
+- O mesmo jogo no celular e na Steam conta como um só.
+- A Steam é atualizada sozinha a cada 10 minutos com o app aberto (e no botão de atualizar).
+- Leaderboard: novo filtro de plataforma (**Todas · Mobile · Steam**), em cima dos outros filtros.
+- Leaderboard: novo período **Mês** (últimos 30 dias).
+- Leaderboard: símbolo no canto de cada jogador mostrando se o jogo é do celular, da Steam (PC) ou dos dois.
+- O Leaderboard não precisa mais de índices novos no Firebase.
+
+## v2.0.1
+
+- O app procura versão nova toda vez que é aberto (e também quando volta do segundo plano), além de a cada 6 horas enquanto está aberto.
+- Se não tiver internet na hora, tenta de novo sozinho depois de 10 minutos.
+
 ## v2.0.0
 
 - Rolagem com impulso em todo o app: ao soltar o dedo a página continua rolando conforme a força do movimento e vai parando aos poucos.

@@ -18,8 +18,8 @@ use chrono::{Datelike, Days, Local, TimeZone};
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 
 use crate::dados::Dados;
-use crate::plataforma::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma};
-use crate::ranking::{ItemRanking, ModoRanking, PeriodoRanking};
+use crate::plataforma::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma, SteamEstado};
+use crate::ranking::{ItemRanking, ModoRanking, PeriodoRanking, PlataformaRanking};
 use crate::sessoes::{self, Sessao, MIN_SESSAO_MS};
 
 use anim::Animador;
@@ -157,6 +157,7 @@ pub struct AbyssHubApp {
     ultimo_check_conta: Option<Instant>,
     lb_modo: ModoRanking,
     lb_periodo: PeriodoRanking,
+    lb_plataforma: PlataformaRanking,
     lb_jogo: Option<String>,
     /// resultados por consulta (modo/período/jogo) e quando chegaram
     lb_cache: HashMap<String, (Vec<ItemRanking>, Instant)>,
@@ -170,9 +171,22 @@ pub struct AbyssHubApp {
     rx_upd: Option<mpsc::Receiver<Result<Option<crate::atualizacao::Versao>, String>>>,
     upd_manual: bool,
     upd_tentou: bool,
+    ultima_tentativa_upd: Option<Instant>,
+    /// quando o último quadro foi desenhado (para saber se o app voltou do segundo plano)
+    ultimo_quadro: Option<Instant>,
     upd_aberto: bool,
     upd_baixa: crate::atualizacao::Baixa,
     ultimo_poll_upd: Option<Instant>,
+
+    // Steam
+    steam: SteamEstado,
+    ultimo_check_steam: Option<Instant>,
+    rx_steam: Option<mpsc::Receiver<Result<Option<String>, String>>>,
+    ultima_sync_steam: Option<Instant>,
+    steam_manual: bool,
+    steam_erro: Option<String>,
+    /// "Desconectar" pede um segundo toque para confirmar (guarda quando foi o primeiro)
+    steam_confirmar_saida: Option<f64>,
 
     /// posição e velocidade da rolagem de cada tela
     rolagens: HashMap<String, rolagem::Rolagem>,
@@ -235,6 +249,7 @@ impl AbyssHubApp {
             ultimo_check_conta: None,
             lb_modo: ModoRanking::Pessoas,
             lb_periodo: PeriodoRanking::Semana,
+            lb_plataforma: PlataformaRanking::Todas,
             lb_jogo: None,
             lb_cache: HashMap::new(),
             lb_rx: None,
@@ -245,9 +260,18 @@ impl AbyssHubApp {
             rx_upd: None,
             upd_manual: false,
             upd_tentou: false,
+            ultima_tentativa_upd: None,
+            ultimo_quadro: None,
             upd_aberto: false,
             upd_baixa: Default::default(),
             ultimo_poll_upd: None,
+            steam: SteamEstado::default(),
+            ultimo_check_steam: None,
+            rx_steam: None,
+            ultima_sync_steam: None,
+            steam_manual: false,
+            steam_erro: None,
+            steam_confirmar_saida: None,
             rolagens: HashMap::new(),
             canon: HashMap::new(),
             apelidos: HashMap::new(),
@@ -400,6 +424,73 @@ impl AbyssHubApp {
         }
     }
 
+    /// Busca os jogos da Steam numa thread separada.
+    pub(crate) fn sincronizar_steam(&mut self, manual: bool) {
+        if self.rx_steam.is_some() || !self.steam.conectado() {
+            return;
+        }
+        self.ultima_sync_steam = Some(Instant::now());
+        self.steam_manual = manual;
+        let plat = self.plat.clone();
+        let (tx, rx) = mpsc::channel();
+        self.rx_steam = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(plat.steam_jogos());
+        });
+    }
+
+    fn receber_steam(&mut self) {
+        let Some(rx) = &self.rx_steam else { return };
+        let r = match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("A leitura da Steam parou no meio".into()),
+        };
+        self.rx_steam = None;
+        let manual = std::mem::take(&mut self.steam_manual);
+        match r.and_then(|j| j.map(|j| crate::steam::ler(&j)).transpose()) {
+            Ok(Some((id, jogos))) => {
+                let primeira = !self.dados.steam.iniciado;
+                let novas = crate::steam::aplicar(&mut self.dados, &id, &jogos, agora_ms());
+                self.steam_erro = None;
+                self.recalcular_jogos_iguais();
+                self.salvar();
+                self.ultima_publicacao = None; // manda o tempo novo para o Leaderboard
+                if primeira || novas > 0 {
+                    self.inicio_dados = self.an.agora;
+                }
+                if primeira {
+                    let n = self.dados.steam.jogos.len();
+                    self.mostrar_toast(format!("Steam conectada · {n} jogos"), false);
+                } else if manual {
+                    self.mostrar_toast("Steam atualizada", false);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if manual {
+                    self.mostrar_toast(e.clone(), true);
+                }
+                self.steam_erro = Some(e);
+            }
+        }
+    }
+
+    /// Esquece a Steam e tira os jogos dela do app.
+    pub(crate) fn desconectar_steam(&mut self) {
+        self.plat.steam_desconectar();
+        crate::steam::remover(&mut self.dados);
+        self.rx_steam = None;
+        self.steam_erro = None;
+        self.ultimo_check_steam = None;
+        self.ultima_sync_steam = None;
+        self.recalcular_jogos_iguais();
+        self.salvar();
+        self.ultima_publicacao = None;
+        self.inicio_dados = self.an.agora;
+        self.mostrar_toast("Steam desconectada", false);
+    }
+
     pub(crate) fn salvar(&mut self) {
         if let Err(e) = self.dados.salvar(&self.plat.pasta_dados()) {
             self.mostrar_toast(format!("Não consegui salvar: {e}"), true);
@@ -528,6 +619,45 @@ impl AbyssHubApp {
         v
     }
 
+    /// Tempo antigo da Steam (antes de conectar) dos jogos visíveis: (pacote principal, ms, última vez).
+    pub(crate) fn bases_steam(&self) -> Vec<(String, i64, i64)> {
+        self.dados
+            .steam
+            .jogos
+            .iter()
+            .map(|(id, j)| (crate::steam::pacote(id), j))
+            .filter(|(p, _)| self.visivel(p))
+            .map(|(p, j)| (self.canonico(&p).to_string(), j.base_ms, j.ultima_ms))
+            .collect()
+    }
+
+    /// Tempo antigo da Steam e última vez jogado de um jogo (somando as versões dele).
+    pub(crate) fn base_steam_de(&self, principal: &str) -> (i64, i64) {
+        let mut r = (0, 0);
+        for p in self.pacotes_de(principal) {
+            if let Some(id) = p.strip_prefix(crate::steam::PREFIXO) {
+                if let Some(j) = self.dados.steam.jogos.get(id) {
+                    r.0 += j.base_ms;
+                    r.1 = r.1.max(j.ultima_ms);
+                }
+            }
+        }
+        r
+    }
+
+    /// Onde o jogo existe: "mobile" (algum pacote do celular), "steam" (algum da Steam).
+    pub(crate) fn plataformas_de(&self, principal: &str) -> Vec<&'static str> {
+        let pacotes = self.pacotes_de(principal);
+        let mut v = Vec::new();
+        if pacotes.iter().any(|p| !crate::steam::eh_steam(p)) {
+            v.push("mobile");
+        }
+        if pacotes.iter().any(|p| crate::steam::eh_steam(p)) {
+            v.push("steam");
+        }
+        v
+    }
+
     pub(crate) fn totais(&self, inicio: i64, fim: i64) -> Vec<Linha> {
         let mut m: HashMap<String, Linha> = HashMap::new();
         for s in self.sessoes_visiveis() {
@@ -543,6 +673,22 @@ impl AbyssHubApp {
             if t > 0 {
                 e.sessoes += 1;
             }
+        }
+        // o tempo de antes de conectar a Steam só conta em "Tudo"
+        for (p, base, ultima) in self.bases_steam() {
+            if inicio > 0 && !m.contains_key(&p) {
+                continue;
+            }
+            let e = m.entry(p.clone()).or_insert(Linha {
+                pacote: p,
+                tempo: 0,
+                ultima: 0,
+                sessoes: 0,
+            });
+            if inicio <= 0 {
+                e.tempo += base;
+            }
+            e.ultima = e.ultima.max(ultima);
         }
         let mut v: Vec<Linha> = m.into_values().filter(|l| l.tempo > 0).collect();
         // Desempate fixo (quem jogou por último, depois o nome do pacote): sem isso, jogos com o
@@ -622,6 +768,17 @@ impl AbyssHubApp {
                 }
             }
         }
+        // Steam: mais rápido enquanto está conectando
+        let intervalo_steam = if self.steam.estado == "conectando" { 500 } else { 2000 };
+        if vencido(self.ultimo_check_steam, intervalo_steam) {
+            let novo = self.plat.steam_estado();
+            if novo.conectado() && !self.steam.conectado() {
+                self.ultima_sync_steam = None; // acabou de conectar: lê os jogos já
+            }
+            self.steam = novo;
+            self.ultimo_check_steam = Some(Instant::now());
+        }
+
         if self.imagens.receber(ctx) {
             self.an.ativo = true;
         }
@@ -665,6 +822,16 @@ impl eframe::App for AbyssHubApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let agora = ctx.input(|i| i.time);
         self.an.quadro(agora);
+        // Ficou mais de 2 minutos sem desenhar = o app estava em segundo plano e foi aberto de novo:
+        // conta como "abrir o app" (procura atualização de novo).
+        if self
+            .ultimo_quadro
+            .is_some_and(|t| t.elapsed() > Duration::from_secs(120))
+        {
+            self.upd_tentou = false;
+            self.boot = Some(agora - 3.0);
+        }
+        self.ultimo_quadro = Some(Instant::now());
         self.an.desligado = !self.dados.animacoes;
         if self.boot.is_none() {
             self.boot = Some(agora);
@@ -693,6 +860,16 @@ impl eframe::App for AbyssHubApp {
         {
             self.sincronizar();
         }
+        // Steam: lê os jogos ao conectar e depois a cada 10 minutos com o app aberto
+        self.receber_steam();
+        if self.steam.conectado()
+            && self.rx_steam.is_none()
+            && self
+                .ultima_sync_steam
+                .map_or(true, |t| t.elapsed() > Duration::from_secs(600))
+        {
+            self.sincronizar_steam(false);
+        }
         if self.permissao {
             self.cuidar_leaderboard();
         }
@@ -719,7 +896,7 @@ impl eframe::App for AbyssHubApp {
         self.folha_atualizacao(ctx);
         self.desenhar_toast(ctx, baixo);
 
-        if self.an.ativo || self.rx.is_some() {
+        if self.an.ativo || self.rx.is_some() || self.rx_steam.is_some() {
             ctx.request_repaint();
         } else if self.dados.animacoes {
             // O brilho do topo se mexe devagar: ~20 quadros por segundo bastam e poupam bateria.
