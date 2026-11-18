@@ -127,7 +127,7 @@ pub fn campo(periodo: PeriodoRanking, plataforma: PlataformaRanking, dia: &str) 
 }
 
 /// Uma linha do Leaderboard.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ItemRanking {
     #[serde(default)]
     pub uid: String,

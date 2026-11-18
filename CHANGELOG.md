@@ -1,5 +1,11 @@
 # Mudanças do AbyssHub
 
+## v2.1.1
+
+- O Leaderboard volta a mostrar quem ainda não atualizou o app (v2.0 ou antes), junto com quem está na versão nova. Essas pessoas aparecem em Todas e Mobile (as versões antigas não têm Steam nem o período Mês).
+- O Leaderboard guarda o último ranking no celular: ao abrir o app (ou depois de uma atualização) ele já aparece na hora, sem ficar vazio carregando, e é trocado pelo novo assim que chega.
+- O "atualizado há..." do Leaderboard agora mostra minutos, horas ou dias.
+
 ## v2.1.0 — Steam
 
 - **Jogos da Steam**: em Configurações > Steam, conecte a sua conta com uma chave grátis da própria Steam (o app mostra o passo a passo). A chave fica guardada só no seu celular.

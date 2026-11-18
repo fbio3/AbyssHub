@@ -23,6 +23,49 @@ const OURO: Color32 = Color32::from_rgb(0xe3, 0xad, 0x58);
 const PRATA: Color32 = Color32::from_rgb(0xa9, 0xb6, 0xcc);
 const BRONZE: Color32 = Color32::from_rgb(0xcd, 0x8b, 0x5a);
 
+/// Arquivo com o último ranking de cada filtro (para não abrir o Leaderboard vazio).
+const ARQUIVO_CACHE: &str = "leaderboard.json";
+/// Rankings mais velhos que isso não são mostrados ao abrir.
+const VALIDADE_CACHE_MS: i64 = 7 * 86_400_000;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheSalvo {
+    quando_ms: i64,
+    itens: Vec<ItemRanking>,
+}
+
+/// Lê o ranking salvo no celular. Cada item: (resultados, "quando chegou").
+pub(crate) fn carregar_cache(pasta: &std::path::Path) -> HashMap<String, (Vec<ItemRanking>, Instant)> {
+    let salvo: HashMap<String, CacheSalvo> = std::fs::read_to_string(pasta.join(ARQUIVO_CACHE))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let agora = agora_ms();
+    salvo
+        .into_iter()
+        .filter(|(_, c)| agora - c.quando_ms < VALIDADE_CACHE_MS)
+        .map(|(k, c)| {
+            let idade = Duration::from_millis((agora - c.quando_ms).max(0) as u64);
+            let quando = Instant::now().checked_sub(idade).unwrap_or_else(Instant::now);
+            (k, (c.itens, quando))
+        })
+        .collect()
+}
+
+pub(crate) fn apagar_cache(pasta: &std::path::Path) {
+    let _ = std::fs::remove_file(pasta.join(ARQUIVO_CACHE));
+}
+
+/// "há 20 s", "há 5 min", "há 2 h", "há 3 dias".
+fn fmt_idade(s: u64) -> String {
+    match s {
+        0..=59 => format!("há {s} s"),
+        60..=3599 => format!("há {} min", s / 60),
+        3600..=86_399 => format!("há {} h", s / 3600),
+        _ => format!("há {} dias", s / 86_400),
+    }
+}
+
 pub(crate) struct Resposta {
     pub chave: Option<String>,
     pub itens: Option<Result<Vec<ItemRanking>, String>>,
@@ -231,11 +274,36 @@ impl AbyssHubApp {
                     self.inicio_dados = self.an.agora;
                 }
                 self.lb_cache.insert(chave, (v, Instant::now()));
+                self.salvar_cache_lb();
                 if !matches!(r.publicado, Some(Err(_))) {
                     self.lb_erro = None;
                 }
             }
             Err(e) => self.lb_erro = Some(e),
+        }
+    }
+
+    /// Guarda o último resultado de cada filtro no celular.
+    fn salvar_cache_lb(&self) {
+        let agora = agora_ms();
+        let salvo: HashMap<&String, CacheSalvo> = self
+            .lb_cache
+            .iter()
+            .map(|(k, (itens, t))| {
+                (
+                    k,
+                    CacheSalvo {
+                        quando_ms: agora - t.elapsed().as_millis() as i64,
+                        itens: itens.clone(),
+                    },
+                )
+            })
+            .collect();
+        let Ok(txt) = serde_json::to_string(&salvo) else { return };
+        let pasta = self.plat.pasta_dados();
+        let tmp = pasta.join(format!("{ARQUIVO_CACHE}.tmp"));
+        if std::fs::write(&tmp, txt).is_ok() {
+            let _ = std::fs::rename(&tmp, pasta.join(ARQUIVO_CACHE));
         }
     }
 
@@ -433,7 +501,7 @@ impl AbyssHubApp {
             ui.vertical_centered(|ui| {
                 let r = ui.add(
                     egui::Label::new(txt(
-                        format!("Atualiza sozinho a cada minuto · atualizado há {quando_txt} s · toque para atualizar"),
+                        format!("Atualiza sozinho a cada minuto · atualizado {} · toque para atualizar", fmt_idade(quando_txt)),
                         12.0,
                         Peso::Normal,
                         s.p.muted,

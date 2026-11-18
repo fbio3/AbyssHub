@@ -1263,30 +1263,22 @@ public class MainActivity extends NativeActivity {
         try {
             if (FirebaseAuth.getInstance().getCurrentUser() == null) return "ERRO:Sem conta";
             FirebaseFirestore db = FirebaseFirestore.getInstance();
+            String colecao = modo.equals("pessoas") ? PESSOAS : PARES;
             String campo = campoRanking(periodo, plataforma, dia);
-            // Só aparece quem tem esse campo: ordenar por um campo dentro de um mapa usa o índice
-            // automático do Firestore (não precisa criar índice composto).
-            FieldPath fp = modo.equals("jogo") ? FieldPath.of("j", chave, campo) : FieldPath.of("r", campo);
-            Query q = db.collection(modo.equals("pessoas") ? PESSOAS : PARES)
-                    .orderBy(fp, Query.Direction.DESCENDING).limit(60);
-            QuerySnapshot snap = Tasks.await(q.get(), 20, TimeUnit.SECONDS);
-
             long agora = System.currentTimeMillis();
-            JSONArray saida = new JSONArray();
+            // documento -> linha do ranking (assim ninguém aparece duas vezes)
+            Map<String, JSONObject> linhas = new HashMap<>();
+
+            // 1) formato novo (v2.1+): só aparece quem tem esse campo. Ordenar por um campo dentro de um
+            //    mapa usa o índice automático do Firestore (não precisa criar índice composto).
+            FieldPath fp = modo.equals("jogo") ? FieldPath.of("j", chave, campo) : FieldPath.of("r", campo);
+            QuerySnapshot snap = Tasks.await(db.collection(colecao)
+                    .orderBy(fp, Query.Direction.DESCENDING).limit(60).get(), 20, TimeUnit.SECONDS);
             for (DocumentSnapshot d : snap.getDocuments()) {
                 Object v = d.get(fp);
                 long ms = v instanceof Number ? ((Number) v).longValue() : 0L;
-                long atualizado = numero(d, "atualizado_ms");
-                if (ms <= 0) continue;
-                // quem não abre o app há mais de 7 (ou 30) dias não conta na semana (ou no mês)
-                if (periodo.equals("semana") && agora - atualizado > SEMANA_MS) continue;
-                if (periodo.equals("mes") && agora - atualizado > MES_MS) continue;
-                JSONObject o = new JSONObject();
-                o.put("uid", texto(d, "uid"));
-                o.put("nome", texto(d, "nome"));
-                o.put("foto", texto(d, "foto"));
-                o.put("ms", ms);
-                o.put("atualizado_ms", atualizado);
+                JSONObject o = linha(d, modo, periodo, ms, agora);
+                if (o == null) continue;
                 if (modo.equals("pessoas")) {
                     Object t = d.get(FieldPath.of("top", campo));
                     if (t instanceof Map) {
@@ -1297,18 +1289,69 @@ public class MainActivity extends NativeActivity {
                         o.put("plats", listaJson(top.get("plats")));
                     }
                 } else {
-                    o.put("pacote", texto(d, "pacote"));
-                    o.put("jogo", texto(d, "jogo"));
-                    o.put("chave", texto(d, "chave"));
                     o.put("plats", listaJson(d.get("plats")));
                 }
-                saida.put(o);
-                if (saida.length() >= 50) break;
+                linhas.put(d.getId(), o);
             }
+
+            // 2) formato antigo (quem ainda está na v2.0 ou antes): só tem tempo do celular e não tem "Mês"
+            boolean temAntigo = !periodo.equals("mes") && !plataforma.equals("steam");
+            if (temAntigo) {
+                try {
+                    String campoAntigo = periodo + "_ms";
+                    Query q = db.collection(colecao);
+                    if (modo.equals("jogo")) q = q.whereEqualTo("chave", chave);
+                    if (periodo.equals("hoje")) q = q.whereEqualTo("dia", dia);
+                    q = q.orderBy(campoAntigo, Query.Direction.DESCENDING).limit(60);
+                    QuerySnapshot antigos = Tasks.await(q.get(), 20, TimeUnit.SECONDS);
+                    for (DocumentSnapshot d : antigos.getDocuments()) {
+                        if (d.contains("r")) continue; // versão nova: já veio na busca 1
+                        if (linhas.containsKey(d.getId())) continue;
+                        JSONObject o = linha(d, modo, periodo, numero(d, campoAntigo), agora);
+                        if (o == null) continue;
+                        if (modo.equals("pessoas")) {
+                            o.put("pacote", texto(d, periodo + "_top_pacote"));
+                            o.put("jogo", texto(d, periodo + "_top_nome"));
+                        }
+                        JSONArray plats = new JSONArray();
+                        plats.put("mobile");
+                        o.put("plats", plats);
+                        linhas.put(d.getId(), o);
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "ranking antigo", t); // sem o formato antigo, mostra só o novo
+                }
+            }
+
+            List<JSONObject> lista = new ArrayList<>(linhas.values());
+            java.util.Collections.sort(lista, (a, b) -> Long.compare(b.optLong("ms"), a.optLong("ms")));
+            JSONArray saida = new JSONArray();
+            for (int i = 0; i < lista.size() && i < 50; i++) saida.put(lista.get(i));
             return saida.toString();
         } catch (Throwable t) {
             return "ERRO:" + mensagemDe(t);
         }
+    }
+
+    /** Parte comum de uma linha do ranking. null = não entra (sem tempo ou sem abrir o app há muito tempo). */
+    private static JSONObject linha(DocumentSnapshot d, String modo, String periodo, long ms, long agora) throws Exception {
+        long atualizado = numero(d, "atualizado_ms");
+        if (ms <= 0) return null;
+        // quem não abre o app há mais de 7 (ou 30) dias não conta na semana (ou no mês)
+        if (periodo.equals("semana") && agora - atualizado > SEMANA_MS) return null;
+        if (periodo.equals("mes") && agora - atualizado > MES_MS) return null;
+        JSONObject o = new JSONObject();
+        o.put("uid", texto(d, "uid"));
+        o.put("nome", texto(d, "nome"));
+        o.put("foto", texto(d, "foto"));
+        o.put("ms", ms);
+        o.put("atualizado_ms", atualizado);
+        if (!modo.equals("pessoas")) {
+            o.put("pacote", texto(d, "pacote"));
+            o.put("jogo", texto(d, "jogo"));
+            o.put("chave", texto(d, "chave"));
+        }
+        return o;
     }
 
     /** JSONObject -> Map (para gravar no Firestore). */

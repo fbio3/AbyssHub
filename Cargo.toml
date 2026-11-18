@@ -1,6 +1,6 @@
 [package]
 name = "abysshub"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2021"
 description = "AbyssHub: veja quanto tempo você joga cada jogo no celular e compita no Leaderboard"
 license = "MIT"

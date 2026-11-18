@@ -212,6 +212,8 @@ impl AbyssHubApp {
 
         let plat_img = plat.clone();
         let pasta_img = plat.pasta_dados().join("imagens");
+        // o último ranking visto fica salvo: aparece na hora ao abrir (ou depois de atualizar) o app
+        let lb_cache = leaderboard::carregar_cache(&plat.pasta_dados());
         let mut app = AbyssHubApp {
             proprio: plat.pacote_proprio(),
             plat,
@@ -251,7 +253,7 @@ impl AbyssHubApp {
             lb_periodo: PeriodoRanking::Semana,
             lb_plataforma: PlataformaRanking::Todas,
             lb_jogo: None,
-            lb_cache: HashMap::new(),
+            lb_cache,
             lb_rx: None,
             lb_pedido: None,
             lb_erro: None,
@@ -762,6 +764,7 @@ impl AbyssHubApp {
                 self.rx_apagar = None;
                 self.ultimo_check_conta = None;
                 self.lb_cache.clear();
+                leaderboard::apagar_cache(&self.plat.pasta_dados());
                 match r {
                     Ok(()) => self.mostrar_toast("Seus dados saíram do Leaderboard", false),
                     Err(e) => self.mostrar_toast(format!("Não consegui apagar: {e}"), true),
