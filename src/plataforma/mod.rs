@@ -98,8 +98,8 @@ pub trait Plataforma: Send + Sync {
     fn historicos(&self) -> Result<String, String> {
         Err("Leaderboard indisponível".into())
     }
-    /// Os eventos (lista em JSON).
-    fn eventos(&self) -> Result<String, String> {
+    /// Os eventos do Placar/Eventos (lista em JSON). (Não confundir com `eventos`, do uso dos apps.)
+    fn buscar_eventos(&self) -> Result<String, String> {
         Err("Leaderboard indisponível".into())
     }
     /// Muda quando um evento é criado, editado ou apagado (para recarregar a lista).

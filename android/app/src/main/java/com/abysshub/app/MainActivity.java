@@ -1056,7 +1056,7 @@ public class MainActivity extends NativeActivity {
     }
 
     /** Lista de eventos (JSON) ou "ERRO:msg". */
-    public static String eventos() {
+    public static String listaEventos() {
         try {
             if (FirebaseAuth.getInstance().getCurrentUser() == null) return "ERRO:Sem conta";
             QuerySnapshot snap = Tasks.await(FirebaseFirestore.getInstance().collection(EVENTOS)

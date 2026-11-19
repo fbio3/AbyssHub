@@ -419,8 +419,8 @@ impl Plataforma for PlataformaAndroid {
         }
     }
 
-    fn eventos(&self) -> Result<String, String> {
-        let r = self.estatico_texto("eventos", &[])?;
+    fn buscar_eventos(&self) -> Result<String, String> {
+        let r = self.estatico_texto("listaEventos", &[])?;
         match r.strip_prefix("ERRO:") {
             Some(e) => Err(e.to_string()),
             None => Ok(r),

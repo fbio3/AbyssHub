@@ -188,7 +188,7 @@ impl Plataforma for PlataformaDesktop {
         Ok(historicos_de_teste().to_string())
     }
 
-    fn eventos(&self) -> Result<String, String> {
+    fn buscar_eventos(&self) -> Result<String, String> {
         Ok(serde_json::Value::Array(self.eventos.lock().unwrap().0.clone()).to_string())
     }
 

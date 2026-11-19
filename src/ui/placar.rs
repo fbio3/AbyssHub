@@ -99,7 +99,7 @@ impl AbyssHubApp {
                 let (tx, rx) = mpsc::channel();
                 self.rx_ev = Some(rx);
                 std::thread::spawn(move || {
-                    let _ = tx.send(plat.eventos().and_then(|j| historico::ler_eventos(&j)));
+                    let _ = tx.send(plat.buscar_eventos().and_then(|j| historico::ler_eventos(&j)));
                 });
             }
         }
