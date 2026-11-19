@@ -10,7 +10,7 @@ use jni::objects::{JByteArray, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
 use winit::platform::android::activity::AndroidApp;
 
-use super::{ler_conta, ler_steam, Conta, InfoApp, PedidoImagem, Plataforma, SteamEstado};
+use super::{ler_conta, ler_fonte, Conta, EstadoFonte, Fonte, InfoApp, PedidoImagem, Plataforma};
 use crate::sessoes::{self, Evento};
 
 const CATEGORIA_JOGO: i32 = 0; // ApplicationInfo.CATEGORY_GAME
@@ -376,22 +376,23 @@ impl Plataforma for PlataformaAndroid {
         }
     }
 
-    fn steam_estado(&self) -> SteamEstado {
-        self.estatico_texto("steamEstado", &[])
-            .map(|j| ler_steam(&j))
+    // MainActivity.java: steamEstado/psnEstado, steamConectar/psnConectar...
+    fn fonte_estado(&self, fonte: Fonte) -> EstadoFonte {
+        self.estatico_texto(&format!("{}Estado", fonte.chave()), &[])
+            .map(|j| ler_fonte(&j))
             .unwrap_or_default()
     }
 
-    fn steam_conectar(&self) {
-        self.estatico_void("steamConectar");
+    fn fonte_conectar(&self, fonte: Fonte) {
+        self.estatico_void(&format!("{}Conectar", fonte.chave()));
     }
 
-    fn steam_desconectar(&self) {
-        self.estatico_void("steamDesconectar");
+    fn fonte_desconectar(&self, fonte: Fonte) {
+        self.estatico_void(&format!("{}Desconectar", fonte.chave()));
     }
 
-    fn steam_jogos(&self) -> Result<Option<String>, String> {
-        let r = self.estatico_texto("steamJogos", &[])?;
+    fn fonte_jogos(&self, fonte: Fonte) -> Result<Option<String>, String> {
+        let r = self.estatico_texto(&format!("{}Jogos", fonte.chave()), &[])?;
         if r == "DESLIGADO" {
             Ok(None)
         } else if let Some(e) = r.strip_prefix("ERRO:") {

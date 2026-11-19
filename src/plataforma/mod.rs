@@ -1,5 +1,6 @@
 //! Tudo que depende do sistema (Android de verdade ou PC com dados de teste).
 
+pub use crate::steam::Fonte;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -118,18 +119,18 @@ pub trait Plataforma: Send + Sync {
     /// Adicionar e-mail e senha à conta atual.
     fn ligar_email(&self) {}
 
-    // ---------- Steam ----------
+    // ---------- Steam e PlayStation ----------
 
-    /// Situação da conexão com a Steam.
-    fn steam_estado(&self) -> SteamEstado {
-        SteamEstado::default()
+    /// Situação da conexão com a Steam ou a PSN.
+    fn fonte_estado(&self, _fonte: Fonte) -> EstadoFonte {
+        EstadoFonte::default()
     }
-    /// Abre a janelinha para colar o perfil e a chave da Steam.
-    fn steam_conectar(&self) {}
-    /// Esquece o perfil e a chave da Steam.
-    fn steam_desconectar(&self) {}
-    /// Lê os jogos da Steam (JSON {"id", "jogos": [...]}). None = Steam não conectada.
-    fn steam_jogos(&self) -> Result<Option<String>, String> {
+    /// Abre a janelinha para conectar (Steam: perfil e chave; PSN: ID online e código).
+    fn fonte_conectar(&self, _fonte: Fonte) {}
+    /// Esquece a conta.
+    fn fonte_desconectar(&self, _fonte: Fonte) {}
+    /// Lê os jogos (JSON {"id", "jogos": [...]}). None = não conectada.
+    fn fonte_jogos(&self, _fonte: Fonte) -> Result<Option<String>, String> {
         Ok(None)
     }
 
@@ -149,18 +150,19 @@ pub trait Plataforma: Send + Sync {
     }
 }
 
-/// Situação da Steam: "indisponivel", "desligado", "conectando", "ok" ou "erro".
+/// Situação da Steam ou da PSN: "indisponivel", "desligado", "conectando", "pendente" (PSN: falta
+/// verificar o código), "ok" ou "erro".
 #[derive(Clone, Debug, PartialEq)]
-pub struct SteamEstado {
+pub struct EstadoFonte {
     pub estado: String,
     pub msg: String,
-    /// Nome do perfil da Steam.
+    /// Nome do perfil (Steam) ou ID online (PSN).
     pub nome: String,
 }
 
-impl Default for SteamEstado {
+impl Default for EstadoFonte {
     fn default() -> Self {
-        SteamEstado {
+        EstadoFonte {
             estado: "indisponivel".into(),
             msg: String::new(),
             nome: String::new(),
@@ -168,19 +170,19 @@ impl Default for SteamEstado {
     }
 }
 
-impl SteamEstado {
+impl EstadoFonte {
     pub fn conectado(&self) -> bool {
         self.estado == "ok"
     }
 }
 
-/// Lê o JSON de steamEstado() (MainActivity.java).
+/// Lê o JSON de steamEstado() / psnEstado() (MainActivity.java).
 #[allow(dead_code)]
-pub fn ler_steam(json: &str) -> SteamEstado {
+pub fn ler_fonte(json: &str) -> EstadoFonte {
     let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
     let t = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
     let estado = t("estado");
-    SteamEstado {
+    EstadoFonte {
         estado: if estado.is_empty() { "indisponivel".into() } else { estado },
         msg: t("msg"),
         nome: t("nome"),

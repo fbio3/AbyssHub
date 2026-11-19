@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::{agora_ms, Conta, EstadoConta, InfoApp, Plataforma, SteamEstado};
+use super::{agora_ms, Conta, EstadoConta, EstadoFonte, Fonte, InfoApp, Plataforma};
 use crate::sessoes::{Evento, PAUSA, RETOMADA};
 
 const APPS: [(&str, &str, bool); 5] = [
@@ -21,16 +21,23 @@ pub struct PlataformaDesktop {
     pasta: PathBuf,
     /// formas de entrar da conta de teste (vazio = não está logado)
     logado: Mutex<Vec<String>>,
-    /// Steam de teste conectada
-    steam: Mutex<bool>,
+    /// Steam e PSN de teste conectadas (índice = Fonte)
+    fontes: Mutex<[bool; 2]>,
 }
 
-/// Jogos da Steam de teste: (appid, nome, minutos). "Abyss Knight" também existe no "celular",
-/// para testar o jogo que está nas duas plataformas.
+/// Jogos da Steam de teste: (appid, nome, minutos). "Abyss Knight" também existe no "celular"
+/// e na PSN, para testar o jogo que está em várias plataformas.
 const STEAM: [(&str, &str, i64); 3] = [
     ("730", "Counter-Strike 2", 5400),
     ("105600", "Terraria", 2300),
     ("999001", "Abyss Knight", 300),
+];
+
+/// Jogos da PSN de teste.
+const PSN: [(&str, &str, i64); 3] = [
+    ("PPSA01284", "God of War Ragnarök", 3100),
+    ("PPSA03016", "Gran Turismo 7", 900),
+    ("PPSA99001", "Abyss Knight", 150),
 ];
 
 impl PlataformaDesktop {
@@ -38,7 +45,7 @@ impl PlataformaDesktop {
         PlataformaDesktop {
             pasta: PathBuf::from("dados-teste"),
             logado: Mutex::new(Vec::new()),
-            steam: Mutex::new(false),
+            fontes: Mutex::new([false; 2]),
         }
     }
 }
@@ -166,46 +173,52 @@ impl Plataforma for PlataformaDesktop {
         Ok(())
     }
 
-    fn steam_estado(&self) -> SteamEstado {
-        if *self.steam.lock().unwrap() {
-            SteamEstado {
+    fn fonte_estado(&self, fonte: Fonte) -> EstadoFonte {
+        if self.fontes.lock().unwrap()[fonte as usize] {
+            EstadoFonte {
                 estado: "ok".into(),
                 msg: String::new(),
-                nome: "Você (Steam de teste)".into(),
+                nome: format!("Você ({} de teste)", fonte.nome()),
             }
         } else {
-            SteamEstado {
+            EstadoFonte {
                 estado: "desligado".into(),
                 ..Default::default()
             }
         }
     }
 
-    fn steam_conectar(&self) {
-        *self.steam.lock().unwrap() = true;
+    fn fonte_conectar(&self, fonte: Fonte) {
+        self.fontes.lock().unwrap()[fonte as usize] = true;
     }
 
-    fn steam_desconectar(&self) {
-        *self.steam.lock().unwrap() = false;
+    fn fonte_desconectar(&self, fonte: Fonte) {
+        self.fontes.lock().unwrap()[fonte as usize] = false;
     }
 
-    fn steam_jogos(&self) -> Result<Option<String>, String> {
-        if !*self.steam.lock().unwrap() {
+    fn fonte_jogos(&self, fonte: Fonte) -> Result<Option<String>, String> {
+        if !self.fontes.lock().unwrap()[fonte as usize] {
             return Ok(None);
         }
-        // o Terraria "ganha" 1 minuto a cada minuto, para dar para ver o tempo novo aparecer
+        // o primeiro jogo "ganha" 1 minuto a cada minuto, para dar para ver o tempo novo aparecer
         let minuto = agora_ms() / 60_000;
-        let jogos: Vec<serde_json::Value> = STEAM
+        let lista = match fonte {
+            Fonte::Steam => &STEAM,
+            Fonte::Psn => &PSN,
+        };
+        let jogos: Vec<serde_json::Value> = lista
             .iter()
-            .map(|(id, nome, min)| {
-                let extra = if *id == "105600" { minuto % 100_000 } else { 0 };
+            .enumerate()
+            .map(|(i, (id, nome, min))| {
+                let extra = if i == 1 { minuto % 100_000 } else { 0 };
                 serde_json::json!({
                     "appid": id, "nome": nome, "min": min + extra,
                     "ultima": agora_ms() / 1000 - 60,
                 })
             })
             .collect();
-        Ok(Some(serde_json::json!({ "id": "76561190000000000", "jogos": jogos }).to_string()))
+        let id = format!("{}-teste", fonte.chave());
+        Ok(Some(serde_json::json!({ "id": id, "jogos": jogos }).to_string()))
     }
 
     fn buscar_ranking(
@@ -233,10 +246,11 @@ impl Plataforma for PlataformaDesktop {
             "mes" => 20,
             _ => 40,
         };
-        // cada jogo de teste "existe" em: celular, Steam ou nos dois
+        // cada jogo de teste "existe" em: celular, Steam, PSN ou em várias
         let plats_de = |j: usize| -> Vec<&'static str> {
             match j {
-                0 => vec!["mobile", "steam"],
+                0 => vec!["mobile", "steam", "psn"],
+                2 => vec!["psn"],
                 3 => vec!["steam"],
                 _ => vec!["mobile"],
             }
@@ -260,11 +274,12 @@ impl Plataforma for PlataformaDesktop {
                     continue;
                 }
                 let base = ((9 - i) as i64 * 37 + k as i64 * 11 + (minuto + i as i64) % 7) * 60_000;
-                // jogo nas duas plataformas: 60% do tempo no celular e 40% na Steam
+                // jogo em várias plataformas: o tempo é dividido entre elas
                 let parte = match (plataforma, pl.len()) {
-                    ("mobile", 2) => 60,
-                    ("steam", 2) => 40,
-                    _ => 100,
+                    ("todas", _) | (_, 1) => 100,
+                    ("mobile", _) => 50,
+                    ("steam", _) => 30,
+                    _ => 20,
                 };
                 let ms = base * fator / 3 * parte / 100;
                 itens.push(serde_json::json!({

@@ -32,3 +32,9 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# Servidor (Cloud Functions)
+/functions/node_modules
+/functions/*.log
+firebase-debug.log
+.secret.local

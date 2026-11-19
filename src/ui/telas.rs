@@ -866,7 +866,7 @@ impl AbyssHubApp {
         let media = if k > 0 { sessoes_total / k as i64 } else { 0 };
         let maior = no_periodo.iter().map(|s| s.duracao()).max().unwrap_or(0);
         // jogo da Steam: o tempo de antes de conectar entra em "Tudo"
-        let (base_steam, ultima_steam) = self.base_steam_de(pacote);
+        let (base_steam, ultima_steam) = self.base_externa_de(pacote);
         let total = sessoes_total + if ini <= 0 { base_steam } else { 0 };
         let ultima = sess.first().map(|s| s.fim).unwrap_or(0).max(ultima_steam);
 
@@ -1063,7 +1063,7 @@ impl AbyssHubApp {
                     self.sync_manual = true;
                     self.precisa_apps = true;
                     self.sincronizar();
-                    self.sincronizar_steam(false);
+                    self.sincronizar_fontes();
                 }
             });
         if sincronizando {
@@ -1268,7 +1268,8 @@ impl AbyssHubApp {
             }
         });
 
-        self.grupo_steam(ui);
+        self.grupo_fonte(ui, Fonte::Steam);
+        self.grupo_fonte(ui, Fonte::Psn);
 
         grupo(ui, &p, |ui| {
             ui.label(txt("Aparência", 15.0, Peso::Negrito, p.text));
@@ -1432,31 +1433,36 @@ impl AbyssHubApp {
 }
 
 impl AbyssHubApp {
-    /// Configurações > Steam: conectar com a chave da própria pessoa, ver o estado e desconectar.
-    fn grupo_steam(&mut self, ui: &mut Ui) {
+    /// Configurações > Steam / PlayStation: conectar, ver o estado e desconectar.
+    fn grupo_fonte(&mut self, ui: &mut Ui, fonte: Fonte) {
         let p = self.p;
-        if self.steam.estado == "indisponivel" {
+        let i = fonte as usize;
+        if self.externos[i].estado.estado == "indisponivel" {
             return;
         }
+        let k = fonte.chave();
+        let (titulo, icone) = match fonte {
+            Fonte::Steam => ("Steam (PC)", Icone::Pc),
+            Fonte::Psn => ("PlayStation (PS4 e PS5)", Icone::Console),
+        };
+        let logado = self.conta.estado == EstadoConta::Logado;
         grupo(ui, &p, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                desenho::icone(ui.painter(), Icone::Pc, r.center(), 22.0, p.text, 0.0);
-                ui.label(txt("Steam (PC)", 15.0, Peso::Negrito, p.text));
+                desenho::icone(ui.painter(), icone, r.center(), 22.0, p.text, 0.0);
+                ui.label(txt(titulo, 15.0, Peso::Negrito, p.text));
             });
-            match self.steam.estado.as_str() {
+            let estado = self.externos[i].estado.clone();
+            match estado.estado.as_str() {
                 "ok" => {
-                    let nome = if self.steam.nome.is_empty() {
-                        "sua conta".to_string()
-                    } else {
-                        self.steam.nome.clone()
-                    };
+                    let nome = if estado.nome.is_empty() { "sua conta".to_string() } else { estado.nome.clone() };
                     ui.label(txt(format!("Conectado como {nome}"), 14.0, Peso::Semi, p.text));
-                    let n = self.dados.steam.jogos.len();
-                    let quando = if self.rx_steam.is_some() {
+                    let d = fonte.dados(&self.dados);
+                    let n = d.jogos.len();
+                    let quando = if self.externos[i].rx.is_some() {
                         "atualizando...".to_string()
                     } else {
-                        format!("atualizado {}", fmt_relativo(self.dados.steam.ultima_sync))
+                        format!("atualizado {}", fmt_relativo(d.ultima_sync))
                     };
                     ui.label(txt(
                         format!("{n} {} com tempo de jogo · {quando}", if n == 1 { "jogo" } else { "jogos" }),
@@ -1470,29 +1476,39 @@ impl AbyssHubApp {
                         Peso::Normal,
                         p.muted,
                     ));
-                    if let Some(e) = self.steam_erro.clone() {
+                    if fonte == Fonte::Psn {
+                        ui.label(txt(
+                            "A PSN só atualiza o tempo de um jogo depois que você fecha ele no console.",
+                            12.5,
+                            Peso::Normal,
+                            p.muted,
+                        ));
+                    }
+                    if let Some(e) = self.externos[i].erro.clone() {
                         ui.label(txt(e, 12.5, Peso::Normal, p.bad));
                     }
-                    let confirmando = self
-                        .steam_confirmar_saida
+                    let confirmando = self.externos[i]
+                        .confirmar_saida
                         .is_some_and(|t| self.an.agora - t < 4.0);
                     let mut sair = false;
                     ui.columns(2, |c| {
-                        if botao(&mut c[0], &mut self.an, &p, "steam_atualizar", "Atualizar agora", false).clicked() {
-                            self.sincronizar_steam(true);
+                        if botao(&mut c[0], &mut self.an, &p, &format!("{k}_atualizar"), "Atualizar agora", false)
+                            .clicked()
+                        {
+                            self.sincronizar_fonte(fonte, true);
                         }
                         let rotulo = if confirmando { "Toque de novo" } else { "Desconectar" };
-                        if botao(&mut c[1], &mut self.an, &p, "steam_sair", rotulo, false).clicked() {
+                        if botao(&mut c[1], &mut self.an, &p, &format!("{k}_sair"), rotulo, false).clicked() {
                             if confirmando {
                                 sair = true;
                             } else {
-                                self.steam_confirmar_saida = Some(self.an.agora);
+                                self.externos[i].confirmar_saida = Some(self.an.agora);
                             }
                         }
                     });
                     if confirmando {
                         ui.label(txt(
-                            "Desconectar tira os jogos da Steam do app e do Leaderboard.",
+                            format!("Desconectar tira os jogos da {} do app e do Leaderboard.", fonte.nome()),
                             12.0,
                             Peso::Normal,
                             p.muted,
@@ -1500,30 +1516,72 @@ impl AbyssHubApp {
                         self.an.ativo = true;
                     }
                     if sair {
-                        self.steam_confirmar_saida = None;
-                        self.desconectar_steam();
+                        self.desconectar_fonte(fonte);
                     }
                 }
                 "conectando" => {
                     ui.horizontal(|ui| {
                         ui.add(egui::Spinner::new().size(18.0));
-                        ui.label(txt("Conectando à Steam...", 13.5, Peso::Normal, p.muted));
+                        ui.label(txt(format!("Conectando à {}...", fonte.nome()), 13.5, Peso::Normal, p.muted));
                     });
                 }
-                estado => {
+                "pendente" => {
+                    // PSN: o código já foi gerado, falta colar no "Sobre" e verificar
                     ui.label(txt(
-                        "Some as horas dos seus jogos da Steam às do celular. Você usa uma chave grátis da sua própria conta Steam, que fica guardada só neste celular.",
-                        13.0,
+                        format!("Falta verificar a conta {}.", estado.nome),
+                        13.5,
+                        Peso::Semi,
+                        p.text,
+                    ));
+                    ui.label(txt(
+                        "Cole o código no \"Sobre\" do seu perfil da PlayStation e toque em Verificar.",
+                        12.5,
                         Peso::Normal,
                         p.muted,
                     ));
-                    if estado == "erro" && !self.steam.msg.is_empty() {
-                        ui.label(txt(&self.steam.msg, 12.5, Peso::Normal, p.bad));
+                    if !estado.msg.is_empty() {
+                        ui.label(txt(&estado.msg, 12.5, Peso::Normal, p.bad));
                     }
-                    let rotulo = if estado == "erro" { "Tentar de novo" } else { "Conectar Steam" };
-                    if botao(ui, &mut self.an, &p, "steam_conectar", rotulo, true).clicked() {
-                        self.plat.steam_conectar();
-                        self.ultimo_check_steam = None;
+                    let mut cancelar = false;
+                    ui.columns(2, |c| {
+                        if botao(&mut c[0], &mut self.an, &p, &format!("{k}_codigo"), "Ver código", true).clicked() {
+                            self.plat.fonte_conectar(fonte);
+                            self.externos[i].ultimo_check = None;
+                        }
+                        if botao(&mut c[1], &mut self.an, &p, &format!("{k}_cancelar"), "Cancelar", false).clicked() {
+                            cancelar = true;
+                        }
+                    });
+                    if cancelar {
+                        self.desconectar_fonte(fonte);
+                    }
+                }
+                atual => {
+                    let texto = match fonte {
+                        Fonte::Steam => "Some as horas dos seus jogos da Steam às do celular. Você usa uma chave grátis da sua própria conta Steam, que fica guardada só neste celular.",
+                        Fonte::Psn => "Some as horas dos seus jogos de PS4 e PS5. Você não precisa de senha: só confirma que a conta é sua colocando um código no \"Sobre\" do seu perfil. O perfil precisa ser público.",
+                    };
+                    ui.label(txt(texto, 13.0, Peso::Normal, p.muted));
+                    if atual == "erro" && !estado.msg.is_empty() {
+                        ui.label(txt(&estado.msg, 12.5, Peso::Normal, p.bad));
+                    }
+                    if fonte == Fonte::Psn && !logado {
+                        ui.label(txt(
+                            "Entre na sua conta (em Conta e Leaderboard, acima) para conectar a PlayStation.",
+                            12.5,
+                            Peso::Normal,
+                            p.muted,
+                        ));
+                    } else {
+                        let rotulo = if atual == "erro" {
+                            "Tentar de novo".to_string()
+                        } else {
+                            format!("Conectar {}", fonte.nome())
+                        };
+                        if botao(ui, &mut self.an, &p, &format!("{k}_conectar"), &rotulo, true).clicked() {
+                            self.plat.fonte_conectar(fonte);
+                            self.externos[i].ultimo_check = None;
+                        }
                     }
                 }
             }

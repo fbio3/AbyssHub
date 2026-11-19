@@ -85,18 +85,35 @@ pub enum PlataformaRanking {
     Todas,
     Mobile,
     Steam,
+    Psn,
 }
 
 impl PlataformaRanking {
-    pub const NOMES: [&'static str; 3] = ["Todas", "Mobile", "Steam"];
-    pub const TODAS: [PlataformaRanking; 3] = [
+    pub const NOMES: [&'static str; 4] = ["Todas", "Mobile", "Steam", "PSN"];
+    pub const TODAS: [PlataformaRanking; 4] = [
         PlataformaRanking::Todas,
         PlataformaRanking::Mobile,
         PlataformaRanking::Steam,
+        PlataformaRanking::Psn,
     ];
 
     pub fn de(i: usize) -> Self {
-        Self::TODAS[i.min(2)]
+        Self::TODAS[i.min(3)]
+    }
+
+    /// Plataforma de um pacote: celular, Steam ou PSN.
+    pub fn do_pacote(pacote: &str) -> Self {
+        match crate::steam::Fonte::de_pacote(pacote) {
+            Some(f) => Self::da_fonte(f),
+            None => PlataformaRanking::Mobile,
+        }
+    }
+
+    pub fn da_fonte(f: crate::steam::Fonte) -> Self {
+        match f {
+            crate::steam::Fonte::Steam => PlataformaRanking::Steam,
+            crate::steam::Fonte::Psn => PlataformaRanking::Psn,
+        }
     }
 
     pub fn indice(self) -> usize {
@@ -112,6 +129,7 @@ impl PlataformaRanking {
             PlataformaRanking::Todas => "todas",
             PlataformaRanking::Mobile => "mobile",
             PlataformaRanking::Steam => "steam",
+            PlataformaRanking::Psn => "psn",
         }
     }
 }
@@ -146,7 +164,7 @@ pub struct ItemRanking {
     pub ms: i64,
     #[serde(default)]
     pub atualizado_ms: i64,
-    /// Onde o jogo existe: "mobile", "steam" (ou os dois).
+    /// Onde o jogo existe: "mobile", "steam", "psn" (um ou mais).
     #[serde(default)]
     pub plats: Vec<String>,
 }
@@ -217,45 +235,46 @@ pub struct Intervalos {
     pub mes: i64,
 }
 
-/// Uma sessão já com o pacote "principal" do jogo e a plataforma de onde veio.
+/// Uma sessão já com o pacote "principal" do jogo e a plataforma de onde veio
+/// (Mobile, Steam ou Psn; nunca Todas).
 pub struct SessaoPub {
     pub sessao: Sessao,
-    pub steam: bool,
+    pub plataforma: PlataformaRanking,
 }
 
 /// Monta o JSON com o tempo da pessoa (só jogos), por período e por plataforma.
-/// - `bases`: tempo antigo da Steam (pacote principal, ms), que só conta em "Tudo";
-/// - `nome`: nome de cada pacote; `plats`: onde o jogo existe ("mobile", "steam").
+/// - `bases`: tempo antigo da Steam/PSN (pacote principal, ms, plataforma), que só conta em "Tudo";
+/// - `nome`: nome de cada pacote; `plats`: onde o jogo existe ("mobile", "steam", "psn").
 pub fn montar_publicacao(
     sessoes: &[SessaoPub],
-    bases: &[(String, i64)],
+    bases: &[(String, i64, PlataformaRanking)],
     nome: impl Fn(&str) -> String,
     plats: impl Fn(&str) -> Vec<&'static str>,
     iv: &Intervalos,
     dia: &str,
 ) -> String {
-    // pacote -> [período][plataforma] (plataforma 0 = todas, 1 = mobile, 2 = steam)
-    let mut por_jogo: HashMap<&str, [[i64; 3]; 4]> = HashMap::new();
+    // pacote -> [período][plataforma] (plataforma: índice de PlataformaRanking; 0 = todas)
+    let mut por_jogo: HashMap<&str, [[i64; 4]; 4]> = HashMap::new();
     for sp in sessoes {
         let s = &sp.sessao;
-        let e = por_jogo.entry(s.pacote.as_str()).or_insert([[0; 3]; 4]);
+        let e = por_jogo.entry(s.pacote.as_str()).or_insert([[0; 4]; 4]);
         let t = [
             sessoes::tempo_no_intervalo(s, iv.hoje, iv.agora),
             sessoes::tempo_no_intervalo(s, iv.semana, iv.agora),
             sessoes::tempo_no_intervalo(s, iv.mes, iv.agora),
             s.duracao(),
         ];
-        let pl = if sp.steam { 2 } else { 1 };
+        let pl = sp.plataforma.indice().max(1);
         for (i, v) in t.into_iter().enumerate() {
             e[i][0] += v;
             e[i][pl] += v;
         }
     }
-    for (p, ms) in bases {
+    for (p, ms, pl) in bases {
         if *ms > 0 {
-            let e = por_jogo.entry(p.as_str()).or_insert([[0; 3]; 4]);
+            let e = por_jogo.entry(p.as_str()).or_insert([[0; 4]; 4]);
             e[3][0] += ms;
-            e[3][2] += ms;
+            e[3][pl.indice().max(1)] += ms;
         }
     }
 
@@ -347,16 +366,22 @@ mod testes {
 
     #[test]
     fn publicacao_soma_e_escolhe_o_top() {
-        let sp = |p: &str, inicio, fim, steam| SessaoPub {
+        let sp = |p: &str, inicio, fim, plataforma| SessaoPub {
             sessao: Sessao {
                 pacote: p.into(),
                 inicio,
                 fim,
             },
-            steam,
+            plataforma,
         };
-        let s = vec![sp("a", 0, 1000, false), sp("b", 5000, 9000, false), sp("b", 9000, 9500, true)];
-        let bases = vec![("c".to_string(), 7000)];
+        use PlataformaRanking::{Mobile, Psn, Steam};
+        let s = vec![
+            sp("a", 0, 1000, Mobile),
+            sp("b", 5000, 9000, Mobile),
+            sp("b", 9000, 9500, Steam),
+            sp("d", 9500, 9600, Psn),
+        ];
+        let bases = vec![("c".to_string(), 7000, Steam)];
         let iv = Intervalos {
             agora: 10_000,
             hoje: 4000,
@@ -365,8 +390,10 @@ mod testes {
         };
         let json = montar_publicacao(&s, &bases, |p| p.to_uppercase(), |_| vec!["mobile"], &iv, "2026-11-17");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["tudo_ms"], 12500);
-        assert_eq!(v["hoje_ms"], 4500);
+        assert_eq!(v["tudo_ms"], 12600);
+        assert_eq!(v["hoje_ms"], 4600);
+        assert_eq!(v["r"]["hoje_2026-11-17_psn"], 100);
+        assert!(v["r"].get("hoje_2026-11-17_psn").is_some());
         assert_eq!(v["top_tudo"]["pacote"], "c");
         assert_eq!(v["top_hoje"]["nome"], "B");
         assert_eq!(v["r"]["hoje_2026-11-17_steam"], 500);

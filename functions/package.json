@@ -1,0 +1,15 @@
+{
+  "name": "abysshub-functions",
+  "private": true,
+  "description": "Servidor do AbyssHub (PlayStation Network)",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.1.0",
+    "psn-api": "^2.18.0"
+  }
+}

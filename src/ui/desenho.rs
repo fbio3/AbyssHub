@@ -149,6 +149,8 @@ pub enum Icone {
     Celular,
     /// Monitor (jogos da Steam / PC)
     Pc,
+    /// Controle (jogos da PlayStation)
+    Console,
 }
 
 pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f32) {
@@ -260,6 +262,28 @@ pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f3
                 st,
             ));
             p.circle_filled(pt(0.0, 6.0), 1.4 * s, cor);
+        }
+        Icone::Console => {
+            p.add(Shape::closed_line(
+                vec![
+                    pt(-8.0, -5.0),
+                    pt(8.0, -5.0),
+                    pt(11.0, 2.0),
+                    pt(10.0, 6.5),
+                    pt(6.5, 6.5),
+                    pt(4.0, 3.0),
+                    pt(-4.0, 3.0),
+                    pt(-6.5, 6.5),
+                    pt(-10.0, 6.5),
+                    pt(-11.0, 2.0),
+                ],
+                st,
+            ));
+            // direcional e botões
+            p.line_segment([pt(-7.5, -0.5), pt(-3.5, -0.5)], st);
+            p.line_segment([pt(-5.5, -2.5), pt(-5.5, 1.5)], st);
+            p.circle_filled(pt(4.5, -1.8), 1.2 * s, cor);
+            p.circle_filled(pt(6.8, 0.6), 1.2 * s, cor);
         }
         Icone::Pc => {
             p.add(Shape::closed_line(

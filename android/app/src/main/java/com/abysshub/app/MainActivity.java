@@ -63,6 +63,9 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.QuerySnapshot;
 import com.google.firebase.firestore.WriteBatch;
+import com.google.firebase.functions.FirebaseFunctions;
+import com.google.firebase.functions.FirebaseFunctionsException;
+import com.google.firebase.functions.HttpsCallableResult;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -975,6 +978,289 @@ public class MainActivity extends NativeActivity {
     }
 
     // =================================================================
+    // PlayStation — quem lê a PSN é o servidor do AbyssHub (Cloud Functions), com uma conta "robô".
+    // A pessoa só prova que a conta é dela colocando um código no "Sobre" do perfil.
+    // =================================================================
+
+    private static final String REGIAO_FUNCOES = "southamerica-east1";
+
+    /** "" = ver as preferências; "conectando"; "erro" (com psnMsg). */
+    private static volatile String psnEstado = "";
+    private static volatile String psnMsg = "";
+
+    private static SharedPreferences prefsPsn() {
+        Context c = contexto;
+        return c == null ? null : c.getSharedPreferences("abysshub_psn", MODE_PRIVATE);
+    }
+
+    private static com.google.android.gms.tasks.Task<HttpsCallableResult> chamar(String nome, Map<String, Object> dados) {
+        return FirebaseFunctions.getInstance(REGIAO_FUNCOES).getHttpsCallable(nome)
+                .call(dados == null ? new HashMap<String, Object>() : dados);
+    }
+
+    /** Mensagem do servidor (em português) ou, se não tiver, a do erro. */
+    private static String mensagemFuncao(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            if (c instanceof FirebaseFunctionsException) {
+                FirebaseFunctionsException f = (FirebaseFunctionsException) c;
+                if (f.getCode() == FirebaseFunctionsException.Code.NOT_FOUND && "NOT_FOUND".equals(f.getMessage())) {
+                    return "O servidor da PlayStation ainda não foi publicado.";
+                }
+                if (f.getCode() == FirebaseFunctionsException.Code.UNAVAILABLE
+                        || f.getCode() == FirebaseFunctionsException.Code.DEADLINE_EXCEEDED) {
+                    String m = f.getMessage();
+                    return m == null || m.equals("UNAVAILABLE") || m.equals("DEADLINE_EXCEEDED")
+                            ? "Sem conexão com o servidor. Tente de novo." : m;
+                }
+                if (f.getMessage() != null) return f.getMessage();
+            }
+        }
+        return mensagemDe(t);
+    }
+
+    /** {"estado": "desligado"|"conectando"|"pendente"|"ok"|"erro", "msg", "nome"} */
+    public static String psnEstado() {
+        try {
+            JSONObject o = new JSONObject();
+            SharedPreferences p = prefsPsn();
+            boolean verificado = p != null && p.getBoolean("verificado", false);
+            boolean temCodigo = p != null && !p.getString("codigo", "").isEmpty();
+            String e = psnEstado;
+            if (e.equals("conectando")) o.put("estado", "conectando");
+            else if (verificado) o.put("estado", "ok");
+            else if (temCodigo) o.put("estado", "pendente");
+            else if (e.equals("erro")) o.put("estado", "erro");
+            else o.put("estado", "desligado");
+            o.put("msg", verificado ? "" : psnMsg);
+            o.put("nome", p == null ? "" : p.getString("nick", ""));
+            return o.toString();
+        } catch (Throwable t) {
+            return "{\"estado\":\"desligado\"}";
+        }
+    }
+
+    public static void psnConectar() {
+        MainActivity a = ativa;
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            SharedPreferences p = prefsPsn();
+            if (p != null && !p.getString("codigo", "").isEmpty() && !p.getBoolean("verificado", false)) {
+                a.dialogoPsnCodigo();
+            } else {
+                a.dialogoPsnNick();
+            }
+        });
+    }
+
+    public static void psnDesconectar() {
+        SharedPreferences p = prefsPsn();
+        if (p != null) p.edit().clear().apply();
+        psnEstado = "";
+        psnMsg = "";
+        try {
+            if (FirebaseAuth.getInstance().getCurrentUser() != null) chamar("psnDesconectar", null);
+        } catch (Throwable ignorar) { }
+    }
+
+    private void dialogoPsnNick() {
+        if (!firebasePronto(this)) {
+            Toast.makeText(this, "A PlayStation não está disponível nesta versão do app.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+            Toast.makeText(this, "Entre na sua conta do AbyssHub primeiro.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(22), dp(8), dp(22), 0);
+        TextView t = new TextView(this);
+        t.setText("Digite o seu ID online da PSN (o seu nick, igualzinho, com maiúsculas e minúsculas).\n\n"
+                + "Depois o app te dá um código para colocar no \"Sobre\" do seu perfil. É só para provar que a "
+                + "conta é sua: você não precisa dar a senha.");
+        t.setTextSize(13);
+        t.setPadding(0, 0, 0, dp(8));
+        l.addView(t);
+        final EditText nick = campo("ID online da PSN",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        SharedPreferences p = prefsPsn();
+        if (p != null) nick.setText(p.getString("nick", ""));
+        l.addView(nick);
+
+        AlertDialog d = new AlertDialog.Builder(this, temaDialogo())
+                .setTitle("Conectar PlayStation")
+                .setView(l)
+                .setPositiveButton("Gerar código", null)
+                .setNegativeButton("Cancelar", null)
+                .create();
+        d.setOnShowListener(x -> d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String n = nick.getText().toString().trim();
+            if (!n.matches("[A-Za-z0-9_-]{3,16}")) {
+                nick.setError("O ID online tem de 3 a 16 letras, números, - ou _");
+                return;
+            }
+            d.dismiss();
+            psnEstado = "conectando";
+            psnMsg = "";
+            Map<String, Object> dados = new HashMap<>();
+            dados.put("nick", n);
+            try {
+                chamar("psnIniciar", dados)
+                        .addOnSuccessListener(r -> {
+                            Object o = r.getData();
+                            Map<?, ?> m = o instanceof Map ? (Map<?, ?>) o : new HashMap<>();
+                            SharedPreferences pp = prefsPsn();
+                            if (pp != null) {
+                                pp.edit().clear()
+                                        .putString("nick", textoDe(m.get("nick")).isEmpty() ? n : textoDe(m.get("nick")))
+                                        .putString("codigo", textoDe(m.get("codigo")))
+                                        .putBoolean("verificado", false)
+                                        .apply();
+                            }
+                            psnEstado = "";
+                            MainActivity a = ativa;
+                            if (a != null) a.dialogoPsnCodigo();
+                        })
+                        .addOnFailureListener(e -> {
+                            psnMsg = mensagemFuncao(e);
+                            psnEstado = "erro";
+                            avisar(psnMsg);
+                        });
+            } catch (Throwable e) {
+                psnMsg = mensagemFuncao(e);
+                psnEstado = "erro";
+                avisar(psnMsg);
+            }
+        }));
+        d.show();
+    }
+
+    private void dialogoPsnCodigo() {
+        SharedPreferences p = prefsPsn();
+        if (p == null) return;
+        final String codigo = p.getString("codigo", "");
+        if (codigo.isEmpty()) { dialogoPsnNick(); return; }
+
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(22), dp(8), dp(22), 0);
+        TextView passos = new TextView(this);
+        passos.setText("1. Copie o código abaixo.\n"
+                + "2. No app PlayStation, no console ou em playstation.com: abra o seu perfil, toque em "
+                + "Editar perfil e cole o código no \"Sobre\". Salve.\n"
+                + "3. Em Configurações > Privacidade da PSN, deixe tudo como \"Qualquer pessoa\" "
+                + "(principalmente quem pode ver os seus jogos).\n"
+                + "4. Volte aqui e toque em Verificar.\n\n"
+                + "Depois de verificar, você já pode apagar o código do \"Sobre\".");
+        passos.setTextSize(13);
+        l.addView(passos);
+        TextView cod = new TextView(this);
+        cod.setText(codigo);
+        cod.setTextSize(26);
+        cod.setTextIsSelectable(true);
+        cod.setGravity(Gravity.CENTER);
+        cod.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        cod.setPadding(0, dp(14), 0, dp(10));
+        l.addView(cod);
+        final TextView aviso = new TextView(this);
+        aviso.setTextSize(13);
+        aviso.setTextColor(0xFFE5534B);
+        aviso.setText(psnMsg);
+        l.addView(aviso);
+
+        AlertDialog d = new AlertDialog.Builder(this, temaDialogo())
+                .setTitle("Código da PlayStation")
+                .setView(l)
+                .setPositiveButton("Verificar", null)
+                .setNeutralButton("Copiar código", null)
+                .setNegativeButton("Depois", null)
+                .create();
+        d.setOnShowListener(x -> {
+            d.getButton(DialogInterface.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                try {
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Código AbyssHub", codigo));
+                    Toast.makeText(this, "Código copiado", Toast.LENGTH_SHORT).show();
+                } catch (Throwable ignorar) { }
+            });
+            android.widget.Button verificar = d.getButton(DialogInterface.BUTTON_POSITIVE);
+            verificar.setOnClickListener(v -> {
+                verificar.setEnabled(false);
+                aviso.setTextColor(cod.getCurrentTextColor());
+                aviso.setText("Verificando...");
+                try {
+                    chamar("psnVerificar", null)
+                            .addOnSuccessListener(r -> {
+                                SharedPreferences pp = prefsPsn();
+                                if (pp != null) pp.edit().putBoolean("verificado", true).apply();
+                                psnMsg = "";
+                                psnEstado = "";
+                                d.dismiss();
+                                Toast.makeText(this, "PlayStation conectada! Já pode tirar o código do \"Sobre\".",
+                                        Toast.LENGTH_LONG).show();
+                            })
+                            .addOnFailureListener(e -> {
+                                psnMsg = mensagemFuncao(e);
+                                verificar.setEnabled(true);
+                                aviso.setTextColor(0xFFE5534B);
+                                aviso.setText(psnMsg);
+                            });
+                } catch (Throwable e) {
+                    psnMsg = mensagemFuncao(e);
+                    verificar.setEnabled(true);
+                    aviso.setTextColor(0xFFE5534B);
+                    aviso.setText(psnMsg);
+                }
+            });
+        });
+        d.show();
+    }
+
+    /** Jogos com tempo: {"id", "jogos": [{appid, nome, min, ultima}]}, "DESLIGADO" ou "ERRO:msg". Bloqueia. */
+    public static String psnJogos() {
+        SharedPreferences p = prefsPsn();
+        if (p == null) return "ERRO:O app ainda está abrindo";
+        if (!p.getBoolean("verificado", false)) return "DESLIGADO";
+        try {
+            if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+                return "ERRO:Entre na sua conta do AbyssHub para atualizar a PlayStation.";
+            }
+            HttpsCallableResult r = Tasks.await(chamar("psnJogos", null), 70, TimeUnit.SECONDS);
+            Object o = r.getData();
+            if (!(o instanceof Map)) return "ERRO:Resposta estranha do servidor.";
+            JSONObject j = new JSONObject((Map<?, ?>) o);
+            // guarda as imagens dos jogos para os ícones
+            JSONObject icones = new JSONObject(p.getString("icones", "{}"));
+            JSONArray jogos = j.optJSONArray("jogos");
+            if (jogos != null) {
+                for (int i = 0; i < jogos.length(); i++) {
+                    JSONObject g = jogos.optJSONObject(i);
+                    if (g == null) continue;
+                    String img = g.optString("imagem");
+                    if (!img.isEmpty()) icones.put(g.optString("appid"), img);
+                }
+            }
+            p.edit().putString("icones", icones.toString()).apply();
+            return j.toString();
+        } catch (Throwable t) {
+            return "ERRO:PlayStation: " + mensagemFuncao(t);
+        }
+    }
+
+    /** Capa do jogo da PSN ("psn:{titleId}"), da imagem que o servidor mandou. */
+    private static Bitmap bitmapPsn(String pacote) {
+        SharedPreferences p = prefsPsn();
+        if (p == null) return null;
+        try {
+            String url = new JSONObject(p.getString("icones", "{}")).optString(pacote.substring("psn:".length()));
+            return url.startsWith("https://") ? baixarBitmap(url) : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // =================================================================
     // Atualizações (GitHub Releases), igual ao AbyssSub
     // =================================================================
 
@@ -1295,7 +1581,7 @@ public class MainActivity extends NativeActivity {
             }
 
             // 2) formato antigo (quem ainda está na v2.0 ou antes): só tem tempo do celular e não tem "Mês"
-            boolean temAntigo = !periodo.equals("mes") && !plataforma.equals("steam");
+            boolean temAntigo = !periodo.equals("mes") && (plataforma.equals("todas") || plataforma.equals("mobile"));
             if (temAntigo) {
                 try {
                     String campoAntigo = periodo + "_ms";
@@ -1490,6 +1776,10 @@ public class MainActivity extends NativeActivity {
     private static Bitmap bitmapDoIcone(String pacote, int tam) {
         if (pacote.startsWith("steam:")) {
             Bitmap b = bitmapSteam(pacote);
+            return b == null ? null : quadrado(b, tam);
+        }
+        if (pacote.startsWith("psn:")) {
+            Bitmap b = bitmapPsn(pacote);
             return b == null ? null : quadrado(b, tam);
         }
         MainActivity a = ativa;

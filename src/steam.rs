@@ -1,25 +1,81 @@
-//! Jogos da Steam (PC).
+//! Jogos de outras plataformas: Steam (PC) e PlayStation (PS4/PS5).
 //!
-//! A Steam só informa o tempo TOTAL de cada jogo (em minutos), não as sessões. Então:
+//! A Steam e a PSN só informam o tempo TOTAL de cada jogo (em minutos), não as sessões. Então:
 //! - no dia em que a pessoa conecta, o total de cada jogo vira uma "base" que só conta em "Tudo";
 //! - a cada atualização, o que cresceu desde a última vez vira uma sessão (com o fim no horário
 //!   em que a Steam diz que o jogo foi jogado por último). É isso que conta em Hoje/Semana/Mês.
 //!
-//! Os jogos da Steam usam o pacote "steam:{appid}".
+//! Os jogos usam o pacote "steam:{appid}" ou "psn:{titleId}".
 
 use serde::{Deserialize, Serialize};
 
 use crate::dados::Dados;
 use crate::sessoes::{self, Sessao};
 
-pub const PREFIXO: &str = "steam:";
-
-pub fn pacote(appid: &str) -> String {
-    format!("{PREFIXO}{appid}")
+/// De onde vêm os jogos que não são do celular.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Fonte {
+    Steam = 0,
+    Psn = 1,
 }
 
-pub fn eh_steam(pacote: &str) -> bool {
-    pacote.starts_with(PREFIXO)
+impl Fonte {
+    pub const TODAS: [Fonte; 2] = [Fonte::Steam, Fonte::Psn];
+
+    pub fn prefixo(self) -> &'static str {
+        match self {
+            Fonte::Steam => "steam:",
+            Fonte::Psn => "psn:",
+        }
+    }
+
+    /// Mesmo nome usado no Leaderboard e no MainActivity.java ("steamJogos", "psnJogos"...).
+    pub fn chave(self) -> &'static str {
+        match self {
+            Fonte::Steam => "steam",
+            Fonte::Psn => "psn",
+        }
+    }
+
+    pub fn nome(self) -> &'static str {
+        match self {
+            Fonte::Steam => "Steam",
+            Fonte::Psn => "PlayStation",
+        }
+    }
+
+    pub fn pacote(self, id: &str) -> String {
+        format!("{}{id}", self.prefixo())
+    }
+
+    /// De qual plataforma é o pacote (None = jogo do celular).
+    pub fn de_pacote(pacote: &str) -> Option<Fonte> {
+        Self::TODAS.into_iter().find(|f| pacote.starts_with(f.prefixo()))
+    }
+
+    /// O id do jogo na plataforma ("steam:730" -> "730").
+    pub fn id_de(self, pacote: &str) -> Option<&str> {
+        pacote.strip_prefix(self.prefixo())
+    }
+
+    pub fn dados(self, d: &Dados) -> &SteamDados {
+        match self {
+            Fonte::Steam => &d.steam,
+            Fonte::Psn => &d.psn,
+        }
+    }
+
+    pub fn dados_mut(self, d: &mut Dados) -> &mut SteamDados {
+        match self {
+            Fonte::Steam => &mut d.steam,
+            Fonte::Psn => &mut d.psn,
+        }
+    }
+}
+
+/// O pacote é de um jogo da Steam ou da PSN.
+pub fn eh_externo(pacote: &str) -> bool {
+    Fonte::de_pacote(pacote).is_some()
 }
 
 /// O que o app guarda de cada jogo da Steam.
@@ -91,37 +147,41 @@ pub fn ler(json: &str) -> Result<(String, Vec<JogoApi>), String> {
     Ok((r.id, r.jogos))
 }
 
-/// Tira do app tudo o que veio da Steam.
-pub fn remover(dados: &mut Dados) {
-    dados.sessoes.retain(|s| !eh_steam(&s.pacote));
-    dados.nomes.retain(|p, _| !eh_steam(p));
-    dados.auto_jogo.retain(|p| !eh_steam(p));
-    dados.marcados_jogo.retain(|p| !eh_steam(p));
-    dados.desmarcados_jogo.retain(|p| !eh_steam(p));
-    dados.steam = SteamDados::default();
+/// Tira do app tudo o que veio dessa plataforma.
+pub fn remover(dados: &mut Dados, fonte: Fonte) {
+    let p = fonte.prefixo();
+    dados.sessoes.retain(|s| !s.pacote.starts_with(p));
+    dados.nomes.retain(|k, _| !k.starts_with(p));
+    dados.auto_jogo.retain(|k| !k.starts_with(p));
+    dados.marcados_jogo.retain(|k| !k.starts_with(p));
+    dados.desmarcados_jogo.retain(|k| !k.starts_with(p));
+    *fonte.dados_mut(dados) = SteamDados::default();
 }
 
-/// Junta uma leitura da Steam aos dados. Devolve quantas sessões novas foram criadas.
-pub fn aplicar(dados: &mut Dados, id: &str, jogos: &[JogoApi], agora: i64) -> usize {
-    if !dados.steam.id.is_empty() && dados.steam.id != id {
-        // outra conta da Steam: começa do zero
-        remover(dados);
+/// Junta uma leitura da Steam/PSN aos dados. Devolve quantas sessões novas foram criadas.
+pub fn aplicar(dados: &mut Dados, fonte: Fonte, id: &str, jogos: &[JogoApi], agora: i64) -> usize {
+    {
+        let d = fonte.dados(dados);
+        if !d.id.is_empty() && d.id != id {
+            // outra conta: começa do zero
+            remover(dados, fonte);
+        }
     }
-    dados.steam.id = id.to_string();
-    let primeira = !dados.steam.iniciado;
-    let ultima_sync = dados.steam.ultima_sync;
+    fonte.dados_mut(dados).id = id.to_string();
+    let primeira = !fonte.dados(dados).iniciado;
+    let ultima_sync = fonte.dados(dados).ultima_sync;
     let mut novas = 0;
     for j in jogos {
         if j.min <= 0 || j.appid.is_empty() {
             continue;
         }
-        let p = pacote(&j.appid);
+        let p = fonte.pacote(&j.appid);
         if !j.nome.is_empty() {
             dados.nomes.insert(p.clone(), j.nome.clone());
         }
         dados.auto_jogo.insert(p.clone());
         let ultima_ms = j.ultima.max(0) * 1000;
-        let e = dados.steam.jogos.entry(j.appid.clone()).or_insert_with(|| {
+        let e = fonte.dados_mut(dados).jogos.entry(j.appid.clone()).or_insert_with(|| {
             if primeira {
                 // o que já tinha antes de conectar: só conta em "Tudo"
                 SteamJogo {
@@ -138,6 +198,8 @@ pub fn aplicar(dados: &mut Dados, id: &str, jogos: &[JogoApi], agora: i64) -> us
             e.nome = j.nome.clone();
         }
         let delta = j.min - e.visto_min;
+        e.visto_min = e.visto_min.max(j.min);
+        e.ultima_ms = e.ultima_ms.max(ultima_ms);
         if delta > 0 {
             let fim = if ultima_ms > ultima_sync && ultima_ms <= agora {
                 ultima_ms
@@ -154,11 +216,10 @@ pub fn aplicar(dados: &mut Dados, id: &str, jogos: &[JogoApi], agora: i64) -> us
             );
             novas += 1;
         }
-        e.visto_min = e.visto_min.max(j.min);
-        e.ultima_ms = e.ultima_ms.max(ultima_ms);
     }
-    dados.steam.iniciado = true;
-    dados.steam.ultima_sync = agora;
+    let d = fonte.dados_mut(dados);
+    d.iniciado = true;
+    d.ultima_sync = agora;
     novas
 }
 
@@ -178,7 +239,7 @@ mod testes {
     #[test]
     fn primeira_leitura_vira_base_e_depois_conta_o_que_cresceu() {
         let mut d = Dados::default();
-        let n = aplicar(&mut d, "1", &[j("10", 600, 100), j("20", 0, 0)], 1_000_000);
+        let n = aplicar(&mut d, Fonte::Steam, "1", &[j("10", 600, 100), j("20", 0, 0)], 1_000_000);
         assert_eq!(n, 0);
         assert_eq!(d.steam.jogos["10"].base_ms, 600 * 60_000);
         assert!(!d.steam.jogos.contains_key("20"));
@@ -186,14 +247,14 @@ mod testes {
         assert!(d.sessoes.is_empty());
 
         // jogou mais 30 min, terminou às 1_500_000 ms
-        let n = aplicar(&mut d, "1", &[j("10", 630, 1_500)], 2_000_000);
+        let n = aplicar(&mut d, Fonte::Steam, "1", &[j("10", 630, 1_500)], 2_000_000);
         assert_eq!(n, 1);
         assert_eq!(d.sessoes.len(), 1);
         assert_eq!(d.sessoes[0].fim, 1_500_000);
         assert_eq!(d.sessoes[0].duracao(), 30 * 60_000);
 
         // jogo comprado depois de conectar: tudo é tempo novo
-        let n = aplicar(&mut d, "1", &[j("10", 630, 1_500), j("30", 20, 0)], 3_000_000);
+        let n = aplicar(&mut d, Fonte::Steam, "1", &[j("10", 630, 1_500), j("30", 20, 0)], 3_000_000);
         assert_eq!(n, 1);
         assert_eq!(d.steam.jogos["30"].base_ms, 0);
     }
@@ -201,11 +262,25 @@ mod testes {
     #[test]
     fn outra_conta_comeca_do_zero() {
         let mut d = Dados::default();
-        aplicar(&mut d, "1", &[j("10", 600, 0)], 1_000);
-        aplicar(&mut d, "2", &[j("99", 5, 0)], 2_000);
+        aplicar(&mut d, Fonte::Steam, "1", &[j("10", 600, 0)], 1_000);
+        aplicar(&mut d, Fonte::Steam, "2", &[j("99", 5, 0)], 2_000);
         assert!(!d.steam.jogos.contains_key("10"));
         assert_eq!(d.steam.jogos["99"].base_ms, 5 * 60_000);
         assert!(!d.nomes.contains_key("steam:10"));
+    }
+
+    #[test]
+    fn steam_e_psn_ficam_separados() {
+        let mut d = Dados::default();
+        aplicar(&mut d, Fonte::Steam, "1", &[j("10", 600, 0)], 1_000);
+        aplicar(&mut d, Fonte::Psn, "9", &[j("CUSA1", 120, 0)], 1_000);
+        assert!(d.psn.jogos.contains_key("CUSA1"));
+        assert!(d.auto_jogo.contains("psn:CUSA1"));
+        remover(&mut d, Fonte::Psn);
+        assert!(d.psn.jogos.is_empty());
+        assert!(d.steam.jogos.contains_key("10"));
+        assert_eq!(Fonte::de_pacote("psn:CUSA1"), Some(Fonte::Psn));
+        assert_eq!(Fonte::de_pacote("com.app"), None);
     }
 
     #[test]

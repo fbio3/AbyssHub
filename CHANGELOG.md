@@ -1,5 +1,12 @@
 # Mudanças do AbyssHub
 
+## v2.2.0 — PlayStation
+
+- **Jogos da PlayStation (PS4 e PS5)**: em Configurações > PlayStation, digite o seu ID online, coloque o código que o app mostra no "Sobre" do seu perfil e toque em Verificar. Você não precisa dar a senha; o perfil só precisa estar público.
+- Os jogos da PSN entram em todas as abas e no Leaderboard, do mesmo jeito que os da Steam: as horas que você já tinha contam em "Tudo", e Hoje, Semana e Mês contam o que você jogar depois de conectar.
+- O mesmo jogo no celular, na Steam e na PSN conta como um só.
+- Leaderboard: nova opção **PSN** no filtro de plataforma e um símbolo de controle para os jogos da PlayStation.
+
 ## v2.1.1
 
 - O Leaderboard volta a mostrar quem ainda não atualizou o app (v2.0 ou antes), junto com quem está na versão nova. Essas pessoas aparecem em Todas e Mobile (as versões antigas não têm Steam nem o período Mês).

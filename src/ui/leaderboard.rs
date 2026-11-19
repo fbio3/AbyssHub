@@ -142,7 +142,7 @@ impl AbyssHubApp {
                     inicio: s.inicio,
                     fim: s.fim,
                 },
-                steam: crate::steam::eh_steam(&s.pacote),
+                plataforma: PlataformaRanking::do_pacote(&s.pacote),
             })
             .collect();
         if let Some((p, ini)) = &self.aberta {
@@ -154,18 +154,19 @@ impl AbyssHubApp {
                         inicio: *ini,
                         fim: agora_ms(),
                     },
-                    steam: false,
+                    plataforma: PlataformaRanking::Mobile,
                 });
             }
         }
-        let bases: Vec<(String, i64)> = self
-            .dados
-            .steam
-            .jogos
-            .iter()
-            .map(|(id, j)| (self.canonico(&crate::steam::pacote(id)).to_string(), j.base_ms))
-            .filter(|(c, ms)| *ms > 0 && conta(c.as_str()))
-            .collect();
+        let mut bases: Vec<(String, i64, PlataformaRanking)> = Vec::new();
+        for f in crate::steam::Fonte::TODAS {
+            for (id, j) in &f.dados(&self.dados).jogos {
+                let c = self.canonico(&f.pacote(id)).to_string();
+                if j.base_ms > 0 && conta(c.as_str()) {
+                    bases.push((c, j.base_ms, PlataformaRanking::da_fonte(f)));
+                }
+            }
+        }
         let iv = ranking::Intervalos {
             agora: agora_ms(),
             hoje: inicio_do_dia(0),
@@ -333,8 +334,8 @@ impl AbyssHubApp {
         }
     }
 
-    /// Símbolo de onde o jogo existe (celular e/ou Steam), com o canto de cima à direita em `canto`.
-    /// Se o jogo está nas duas, aparecem os dois menores, um do lado do outro.
+    /// Símbolo de onde o jogo existe (celular, Steam, PSN), com o canto de cima à direita em `canto`.
+    /// Se o jogo está em mais de uma, aparecem todos menores, um do lado do outro.
     fn selo_plataformas(&self, pt: &Painter, plats: &[String], canto: Pos2, escala: f32, a: f32) {
         let mut lista = Vec::new();
         if plats.iter().any(|p| p == "mobile") {
@@ -343,10 +344,17 @@ impl AbyssHubApp {
         if plats.iter().any(|p| p == "steam") {
             lista.push(Icone::Pc);
         }
+        if plats.iter().any(|p| p == "psn") {
+            lista.push(Icone::Console);
+        }
         if lista.is_empty() || a <= 0.0 {
             return;
         }
-        let tam = escala * if lista.len() == 2 { 16.0 } else { 19.0 };
+        let tam = escala * match lista.len() {
+            1 => 19.0,
+            2 => 16.0,
+            _ => 14.0,
+        };
         let mut x = canto.x;
         for qual in lista.into_iter().rev() {
             let r = Rect::from_min_size(pos2(x - tam, canto.y), Vec2::splat(tam));
@@ -827,7 +835,7 @@ impl AbyssHubApp {
                     ui.with_layout(Layout::top_down(Align::Max), |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         if !it.plats.is_empty() {
-                            let (rb, _) = ui.allocate_exact_size(vec2(40.0, 15.0), Sense::hover());
+                            let (rb, _) = ui.allocate_exact_size(vec2(52.0, 15.0), Sense::hover());
                             let pt = ui.painter().clone();
                             self.selo_plataformas(&pt, &it.plats, rb.right_top(), 0.8, 1.0);
                         } else {

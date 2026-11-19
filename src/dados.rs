@@ -51,6 +51,9 @@ pub struct Dados {
     /// Jogos da Steam (a chave da Steam fica só no Android, não aqui).
     #[serde(default)]
     pub steam: crate::steam::SteamDados,
+    /// Jogos da PlayStation (a ligação com a conta PSN fica no servidor).
+    #[serde(default)]
+    pub psn: crate::steam::SteamDados,
 }
 
 fn verdadeiro() -> bool {
@@ -72,6 +75,7 @@ impl Default for Dados {
             animacoes: true,
             atualizacao: Default::default(),
             steam: Default::default(),
+            psn: Default::default(),
         }
     }
 }
