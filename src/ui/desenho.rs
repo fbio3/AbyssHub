@@ -151,6 +151,10 @@ pub enum Icone {
     Pc,
     /// Controle (jogos da PlayStation)
     Console,
+    /// Medalha (aba Placar)
+    Medalha,
+    /// Bandeira (aba Eventos)
+    Bandeira,
 }
 
 pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f32) {
@@ -262,6 +266,21 @@ pub fn icone(p: &Painter, qual: Icone, c: Pos2, tam: f32, cor: Color32, giro: f3
                 st,
             ));
             p.circle_filled(pt(0.0, 6.0), 1.4 * s, cor);
+        }
+        Icone::Medalha => {
+            // fitas + medalha redonda com estrela
+            p.line_segment([pt(-5.0, -10.0), pt(-1.5, -3.0)], st);
+            p.line_segment([pt(5.0, -10.0), pt(1.5, -3.0)], st);
+            p.circle_stroke(pt(0.0, 3.5), 6.5 * s, st);
+            p.circle_filled(pt(0.0, 3.5), 2.2 * s, cor);
+        }
+        Icone::Bandeira => {
+            // mastro + bandeira
+            p.line_segment([pt(-7.0, -10.0), pt(-7.0, 10.0)], st);
+            p.add(Shape::closed_line(
+                vec![pt(-7.0, -9.0), pt(8.0, -9.0), pt(5.0, -4.5), pt(8.0, 0.0), pt(-7.0, 0.0)],
+                st,
+            ));
         }
         Icone::Console => {
             p.add(Shape::closed_line(

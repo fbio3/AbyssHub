@@ -2,6 +2,7 @@
 
 pub mod atualizacao;
 pub mod dados;
+pub mod historico;
 pub mod plataforma;
 pub mod ranking;
 pub mod sessoes;

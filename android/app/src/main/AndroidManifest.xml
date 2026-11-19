@@ -12,6 +12,8 @@
         tools:ignore="QueryAllPackagesPermission" />
     <!-- Atualizar o app pelo próprio app (baixa o APK da página de versões do GitHub) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Avisos de eventos (começou / terminou) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -33,6 +35,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Avisos de eventos (Firebase Cloud Messaging) -->
+        <service
+            android:name=".AvisosService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="eventos" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_aviso" />
 
         <!-- Entrega o APK da atualização para o instalador do Android -->
         <provider

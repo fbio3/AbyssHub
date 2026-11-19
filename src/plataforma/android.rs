@@ -402,6 +402,56 @@ impl Plataforma for PlataformaAndroid {
         }
     }
 
+    fn publicar_historico(&self, json: &str) -> Result<(), String> {
+        let r = self.estatico_texto("publicarHistorico", &[json])?;
+        if r.is_empty() {
+            Ok(())
+        } else {
+            Err(r)
+        }
+    }
+
+    fn historicos(&self) -> Result<String, String> {
+        let r = self.estatico_texto("historicos", &[])?;
+        match r.strip_prefix("ERRO:") {
+            Some(e) => Err(e.to_string()),
+            None => Ok(r),
+        }
+    }
+
+    fn eventos(&self) -> Result<String, String> {
+        let r = self.estatico_texto("eventos", &[])?;
+        match r.strip_prefix("ERRO:") {
+            Some(e) => Err(e.to_string()),
+            None => Ok(r),
+        }
+    }
+
+    fn eventos_versao(&self) -> i64 {
+        self.estatico_texto("eventosVersao", &[])
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(0)
+    }
+
+    fn evento_editar(&self, evento: &str, jogos: &str) {
+        let _ = self.estatico_texto("eventoEditar", &[evento, jogos]);
+    }
+
+    fn evento_apagar(&self, id: &str) {
+        let _ = self.estatico_texto("eventoApagar", &[id]);
+    }
+
+    fn escolher_data(&self, atual: &str) {
+        let _ = self.estatico_texto("escolherData", &[atual]);
+    }
+
+    fn data_escolhida(&self) -> Option<String> {
+        self.estatico_texto("dataEscolhida", &[])
+            .ok()
+            .filter(|t| !t.is_empty())
+    }
+
     fn apagar_meus_dados(&self) -> Result<(), String> {
         let r = self.com_env(|env, act| {
             let classe = env.get_object_class(act)?;

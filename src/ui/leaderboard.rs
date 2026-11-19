@@ -76,7 +76,7 @@ pub(crate) fn chave_dia() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
 
-fn cor_medalha(pos: usize) -> Color32 {
+pub(super) fn cor_medalha(pos: usize) -> Color32 {
     match pos {
         0 => OURO,
         1 => PRATA,
@@ -129,7 +129,8 @@ impl AbyssHubApp {
 
     /// O JSON com o seu tempo (só o que conta como jogo, com os repetidos juntados),
     /// separado por período e por plataforma (celular / Steam).
-    fn json_publicacao(&self) -> String {
+    /// As suas sessões de jogo já com o pacote principal (repetidos juntados) e a plataforma.
+    pub(super) fn sessoes_publicacao(&self) -> Vec<ranking::SessaoPub> {
         let conta = |c: &str| c != self.proprio && self.eh_jogo(c);
         let mut sess: Vec<ranking::SessaoPub> = self
             .dados
@@ -158,6 +159,12 @@ impl AbyssHubApp {
                 });
             }
         }
+        sess
+    }
+
+    fn json_publicacao(&self) -> String {
+        let conta = |c: &str| c != self.proprio && self.eh_jogo(c);
+        let sess = self.sessoes_publicacao();
         let mut bases: Vec<(String, i64, PlataformaRanking)> = Vec::new();
         for f in crate::steam::Fonte::TODAS {
             for (id, j) in &f.dados(&self.dados).jogos {
@@ -318,7 +325,7 @@ impl AbyssHubApp {
     // =====================================================================
 
     /// Foto redonda da pessoa (ou a inicial, enquanto carrega / se não tiver foto).
-    fn foto_pessoa(&mut self, pt: &Painter, item: &ItemRanking, centro: Pos2, raio: f32) {
+    pub(super) fn foto_pessoa(&mut self, pt: &Painter, item: &ItemRanking, centro: Pos2, raio: f32) {
         let r = Rect::from_center_size(centro, Vec2::splat(raio * 2.0));
         match self.imagens.foto(&item.foto) {
             Some(tex) => desenho::imagem_recortada(pt, tex, r, raio, Color32::WHITE),
@@ -336,7 +343,7 @@ impl AbyssHubApp {
 
     /// Símbolo de onde o jogo existe (celular, Steam, PSN), com o canto de cima à direita em `canto`.
     /// Se o jogo está em mais de uma, aparecem todos menores, um do lado do outro.
-    fn selo_plataformas(&self, pt: &Painter, plats: &[String], canto: Pos2, escala: f32, a: f32) {
+    pub(super) fn selo_plataformas(&self, pt: &Painter, plats: &[String], canto: Pos2, escala: f32, a: f32) {
         let mut lista = Vec::new();
         if plats.iter().any(|p| p == "mobile") {
             lista.push(Icone::Celular);
@@ -525,7 +532,7 @@ impl AbyssHubApp {
         self.an.ativo |= logado && self.aba == Aba::Leaderboard;
     }
 
-    fn cartao_login(&mut self, ui: &mut Ui) {
+    pub(super) fn cartao_login(&mut self, ui: &mut Ui) {
         let p = self.p;
         if self.conta.estado == EstadoConta::Indisponivel {
             ui.label(txt("Leaderboard indisponível", 17.0, Peso::Negrito, p.text));
@@ -609,8 +616,23 @@ impl AbyssHubApp {
     }
 
     fn escolher_jogo(&mut self, ui: &mut Ui) {
-        self.titulo_cartao(ui, "Escolha o jogo", "deslize para o lado");
         let jogos = self.jogos_para_escolher();
+        let sel = self.lb_jogo.clone();
+        if let Some(c) = self.escolher_jogo_em(ui, "lb", &jogos, sel.as_deref()) {
+            self.lb_jogo = Some(c);
+            self.inicio_dados = self.an.agora;
+        }
+    }
+
+    /// Fileira de jogos para escolher (chave, pacote, nome). Devolve a chave tocada.
+    pub(super) fn escolher_jogo_em(
+        &mut self,
+        ui: &mut Ui,
+        id: &str,
+        jogos: &[(String, String, String)],
+        sel: Option<&str>,
+    ) -> Option<String> {
+        self.titulo_cartao(ui, "Escolha o jogo", "deslize para o lado");
         if jogos.is_empty() {
             ui.label(txt(
                 "Nenhum jogo ainda. Jogue algo primeiro!",
@@ -618,15 +640,16 @@ impl AbyssHubApp {
                 Peso::Normal,
                 self.p.muted,
             ));
-            return;
+            return None;
         }
         let p = self.p;
-        egui::ScrollArea::horizontal().id_salt("lb_jogos").show(ui, |ui| {
+        let mut tocado = None;
+        egui::ScrollArea::horizontal().id_salt(format!("{id}_jogos")).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                for (chave, pacote, nome) in &jogos {
-                    let sel = self.lb_jogo.as_deref() == Some(chave.as_str());
-                    let t = self.an.ir(&format!("lbj:{chave}"), if sel { 1.0 } else { 0.0 }, 0.25);
+                for (chave, pacote, nome) in jogos {
+                    let on = sel == Some(chave.as_str());
+                    let t = self.an.ir(&format!("{id}j:{chave}"), if on { 1.0 } else { 0.0 }, 0.25);
                     let nome_curto: String = nome.chars().take(18).collect();
                     let g = ui.painter().layout_no_wrap(nome_curto, fonte(13.5, Peso::Semi), p.text);
                     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 50.0, 40.0), Sense::click());
@@ -643,13 +666,13 @@ impl AbyssHubApp {
                         g,
                         misturar_cor(p.text, p.chip_on_ink, t),
                     );
-                    if resp.clicked() && !sel {
-                        self.lb_jogo = Some(chave.clone());
-                        self.inicio_dados = self.an.agora;
+                    if resp.clicked() && !on {
+                        tocado = Some(chave.clone());
                     }
                 }
             });
         });
+        tocado
     }
 
     /// Os 3 primeiros em cima de "degraus" (o do meio é o 1º).

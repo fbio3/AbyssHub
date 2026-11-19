@@ -3,8 +3,10 @@
 mod anim;
 mod atualizacao;
 mod desenho;
+mod eventos;
 mod imagens;
 mod leaderboard;
+mod placar;
 mod rolagem;
 mod telas;
 mod tema;
@@ -18,6 +20,7 @@ use chrono::{Datelike, Days, Local, TimeZone};
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 
 use crate::dados::Dados;
+use crate::historico::{Evento, HistoricoPessoa};
 use crate::plataforma::{agora_ms, Conta, EstadoConta, EstadoFonte, InfoApp, Plataforma};
 use crate::steam::Fonte;
 use crate::ranking::{ItemRanking, ModoRanking, PeriodoRanking, PlataformaRanking};
@@ -81,6 +84,8 @@ pub(crate) enum Aba {
     Inicio,
     Jogos,
     Leaderboard,
+    Placar,
+    Eventos,
     Historico,
 }
 
@@ -90,7 +95,9 @@ impl Aba {
             Aba::Inicio => 0,
             Aba::Jogos => 1,
             Aba::Leaderboard => 2,
-            Aba::Historico => 3,
+            Aba::Placar => 3,
+            Aba::Eventos => 4,
+            Aba::Historico => 5,
         }
     }
 }
@@ -173,6 +180,42 @@ pub struct AbyssHubApp {
     lb_periodo: PeriodoRanking,
     lb_plataforma: PlataformaRanking,
     lb_jogo: Option<String>,
+
+    // Placar (filtros)
+    pl_modo: ModoRanking,
+    /// 0 = dia, 1 = semana, 2 = mês, 3 = tudo
+    pl_periodo: usize,
+    pl_plataforma: PlataformaRanking,
+    pl_jogo: Option<String>,
+    /// dia escolhido no calendário (None = todos os períodos, do mais recente para trás)
+    pl_data: Option<chrono::NaiveDate>,
+    /// quantos períodos já aparecem (vai aumentando conforme a pessoa desce)
+    pl_limite: usize,
+    pl_esperando_data: bool,
+    pl_ultimo_check_data: Option<Instant>,
+    /// "Tudo" do Placar vem do Leaderboard: chave -> (lista, quando)
+    pl_tudo: HashMap<String, (Vec<ItemRanking>, Instant)>,
+    pl_tudo_pedido: Option<(String, Instant)>,
+    rx_pl_tudo: Option<mpsc::Receiver<(String, Result<Vec<ItemRanking>, String>)>>,
+
+    // histórico de todo mundo (Placar e Eventos)
+    hist: Vec<HistoricoPessoa>,
+    hist_quando: Option<Instant>,
+    hist_pedido: Option<Instant>,
+    hist_erro: Option<String>,
+    rx_hist: Option<mpsc::Receiver<Result<Vec<HistoricoPessoa>, String>>>,
+    /// o seu histórico já enviado (json, quando)
+    hist_publicado: Option<(String, Instant)>,
+    rx_hist_pub: Option<mpsc::Receiver<Result<(), String>>>,
+
+    // eventos
+    eventos: Vec<Evento>,
+    ev_quando: Option<Instant>,
+    ev_pedido: Option<Instant>,
+    ev_erro: Option<String>,
+    ev_versao: i64,
+    ev_ultimo_check: Option<Instant>,
+    rx_ev: Option<mpsc::Receiver<Result<Vec<Evento>, String>>>,
     /// resultados por consulta (modo/período/jogo) e quando chegaram
     lb_cache: HashMap<String, (Vec<ItemRanking>, Instant)>,
     lb_rx: Option<mpsc::Receiver<leaderboard::Resposta>>,
@@ -260,6 +303,31 @@ impl AbyssHubApp {
             lb_periodo: PeriodoRanking::Semana,
             lb_plataforma: PlataformaRanking::Todas,
             lb_jogo: None,
+            pl_modo: ModoRanking::Pessoas,
+            pl_periodo: 1,
+            pl_plataforma: PlataformaRanking::Todas,
+            pl_jogo: None,
+            pl_data: None,
+            pl_limite: 6,
+            pl_esperando_data: false,
+            pl_ultimo_check_data: None,
+            pl_tudo: HashMap::new(),
+            pl_tudo_pedido: None,
+            rx_pl_tudo: None,
+            hist: Vec::new(),
+            hist_quando: None,
+            hist_pedido: None,
+            hist_erro: None,
+            rx_hist: None,
+            hist_publicado: None,
+            rx_hist_pub: None,
+            eventos: Vec::new(),
+            ev_quando: None,
+            ev_pedido: None,
+            ev_erro: None,
+            ev_versao: 0,
+            ev_ultimo_check: None,
+            rx_ev: None,
             lb_cache,
             lb_rx: None,
             lb_pedido: None,
@@ -892,6 +960,7 @@ impl eframe::App for AbyssHubApp {
         }
         if self.permissao {
             self.cuidar_leaderboard();
+            self.cuidar_placar_e_eventos();
         }
         self.cuidar_atualizacao();
 
@@ -916,7 +985,8 @@ impl eframe::App for AbyssHubApp {
         self.folha_atualizacao(ctx);
         self.desenhar_toast(ctx, baixo);
 
-        if self.an.ativo || self.rx.is_some() || self.externos.iter().any(|e| e.rx.is_some()) {
+        let esperando = self.rx_hist.is_some() || self.rx_ev.is_some() || self.rx_pl_tudo.is_some() || self.pl_esperando_data;
+        if self.an.ativo || self.rx.is_some() || self.externos.iter().any(|e| e.rx.is_some()) || esperando {
             ctx.request_repaint();
         } else if self.dados.animacoes {
             // O brilho do topo se mexe devagar: ~20 quadros por segundo bastam e poupam bateria.

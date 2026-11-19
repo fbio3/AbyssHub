@@ -64,6 +64,7 @@ import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.QuerySnapshot;
 import com.google.firebase.firestore.WriteBatch;
 import com.google.firebase.functions.FirebaseFunctions;
+import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.functions.FirebaseFunctionsException;
 import com.google.firebase.functions.HttpsCallableResult;
 
@@ -79,6 +80,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -97,6 +99,9 @@ public class MainActivity extends NativeActivity {
     private static final String TAG = "AbyssHub";
     private static final String PESSOAS = "abysshub_pessoas";
     private static final String PARES = "abysshub_pares";
+    private static final String HISTORICO = "abysshub_historico";
+    private static final String EVENTOS = "abysshub_eventos";
+    private static final String ADMINS = "abysshub_admins";
     private static final String ICONES = "abysshub_icones";
     private static final long SEMANA_MS = 7L * 24 * 60 * 60 * 1000;
 
@@ -114,6 +119,7 @@ public class MainActivity extends NativeActivity {
         ativa = this;
         contexto = getApplicationContext();
         super.onCreate(savedInstanceState);
+        prepararAvisos();
     }
 
     @Override
@@ -158,6 +164,8 @@ public class MainActivity extends NativeActivity {
             FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
             if (u != null) {
                 garantirPerfil(u.getUid());
+                checarCriador(u.getUid());
+                o.put("criador", criador && u.getUid().equals(criadorUid));
                 o.put("estado", "logado");
                 o.put("uid", u.getUid());
                 o.put("nome", nomeEfetivo(u));
@@ -978,6 +986,434 @@ public class MainActivity extends NativeActivity {
     }
 
     // =================================================================
+    // Histórico por dia (Placar e Eventos)
+    // =================================================================
+
+    /** Envia o histórico por dia (JSON montado em historico.rs). Devolve "" se deu certo. */
+    public static String publicarHistorico(String json) {
+        try {
+            FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+            if (u == null) return "Sem conta";
+            if (!perfilUid.equals(u.getUid())) carregarPerfil(u.getUid());
+            Map<String, Object> doc = mapa(new JSONObject(json));
+            doc.put("uid", u.getUid());
+            doc.put("nome", nomeEfetivo(u));
+            doc.put("foto", fotoEfetiva(u));
+            doc.put("atualizado_ms", System.currentTimeMillis());
+            Tasks.await(FirebaseFirestore.getInstance().collection(HISTORICO).document(u.getUid()).set(doc),
+                    30, TimeUnit.SECONDS);
+            return "";
+        } catch (Throwable t) {
+            return mensagemDe(t);
+        }
+    }
+
+    /** O histórico de todo mundo (lista em JSON) ou "ERRO:msg". */
+    public static String historicos() {
+        try {
+            if (FirebaseAuth.getInstance().getCurrentUser() == null) return "ERRO:Sem conta";
+            QuerySnapshot snap = Tasks.await(
+                    FirebaseFirestore.getInstance().collection(HISTORICO).limit(300).get(), 30, TimeUnit.SECONDS);
+            JSONArray a = new JSONArray();
+            for (DocumentSnapshot d : snap.getDocuments()) {
+                Map<String, Object> m = d.getData();
+                if (m != null) a.put(new JSONObject(m));
+            }
+            return a.toString();
+        } catch (Throwable t) {
+            return "ERRO:" + mensagemDe(t);
+        }
+    }
+
+    // =================================================================
+    // Eventos (só a conta do criador cria, edita e apaga)
+    // =================================================================
+
+    /** Aumenta quando um evento é salvo ou apagado, para o Rust recarregar a lista. */
+    private static volatile long eventosVersao = 0;
+    private static volatile String criadorUid = "";
+    private static volatile boolean criador = false;
+    private static volatile long criadorChecado = 0;
+
+    /** Vê (de vez em quando) se a conta está em abysshub_admins. */
+    private static void checarCriador(String uid) {
+        long agora = System.currentTimeMillis();
+        if (uid.equals(criadorUid) && agora - criadorChecado < 10 * 60 * 1000) return;
+        if (!uid.equals(criadorUid)) criador = false;
+        criadorUid = uid;
+        criadorChecado = agora;
+        try {
+            FirebaseFirestore.getInstance().collection(ADMINS).document(uid).get()
+                    .addOnSuccessListener(d -> { if (uid.equals(criadorUid)) criador = d.exists(); })
+                    .addOnFailureListener(e -> { if (uid.equals(criadorUid)) criador = false; });
+        } catch (Throwable t) {
+            criador = false;
+        }
+    }
+
+    public static String eventosVersao() {
+        return String.valueOf(eventosVersao);
+    }
+
+    /** Lista de eventos (JSON) ou "ERRO:msg". */
+    public static String eventos() {
+        try {
+            if (FirebaseAuth.getInstance().getCurrentUser() == null) return "ERRO:Sem conta";
+            QuerySnapshot snap = Tasks.await(FirebaseFirestore.getInstance().collection(EVENTOS)
+                    .orderBy("inicio_ms", Query.Direction.DESCENDING).limit(100).get(), 20, TimeUnit.SECONDS);
+            JSONArray a = new JSONArray();
+            for (DocumentSnapshot d : snap.getDocuments()) {
+                Map<String, Object> m = d.getData();
+                if (m == null) continue;
+                JSONObject o = new JSONObject(m);
+                o.put("id", d.getId());
+                a.put(o);
+            }
+            return a.toString();
+        } catch (Throwable t) {
+            return "ERRO:" + mensagemDe(t);
+        }
+    }
+
+    // ---------- datas (fuso do celular) ----------
+
+    private static String fmtDia(Calendar c) {
+        return String.format(java.util.Locale.US, "%04d-%02d-%02d",
+                c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH));
+    }
+
+    private static String fmtDiaBr(Calendar c) {
+        return String.format(java.util.Locale.US, "%02d/%02d/%04d",
+                c.get(Calendar.DAY_OF_MONTH), c.get(Calendar.MONTH) + 1, c.get(Calendar.YEAR));
+    }
+
+    /** "AAAA-MM-DD" -> Calendar à meia-noite (hoje se não der para ler). */
+    private static Calendar lerDia(String s) {
+        Calendar c = Calendar.getInstance();
+        try {
+            String[] p = s.split("-");
+            c.set(Integer.parseInt(p[0]), Integer.parseInt(p[1]) - 1, Integer.parseInt(p[2]));
+        } catch (Throwable ignorar) { }
+        c.set(Calendar.HOUR_OF_DAY, 0);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c;
+    }
+
+    private static Calendar copia(Calendar c) {
+        return (Calendar) c.clone();
+    }
+
+    private static Calendar maisDias(Calendar c, int n) {
+        Calendar r = copia(c);
+        r.add(Calendar.DAY_OF_MONTH, n);
+        return r;
+    }
+
+    // ---------- calendário para o Placar ----------
+
+    private static volatile String dataEscolhida = "";
+
+    public static String escolherData(String atual) {
+        MainActivity a = ativa;
+        if (a == null) return "";
+        a.runOnUiThread(() -> {
+            Calendar c = lerDia(atual);
+            android.app.DatePickerDialog d = new android.app.DatePickerDialog(a,
+                    (v, ano, mes, dia) -> {
+                        Calendar e = Calendar.getInstance();
+                        e.set(ano, mes, dia);
+                        dataEscolhida = fmtDia(e);
+                    },
+                    c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH));
+            d.setOnCancelListener(x -> dataEscolhida = "CANCELADO");
+            d.show();
+        });
+        return "";
+    }
+
+    /** O dia escolhido ("AAAA-MM-DD"), "CANCELADO" ou "" (nada ainda). Só devolve uma vez. */
+    public static String dataEscolhida() {
+        String d = dataEscolhida;
+        dataEscolhida = "";
+        return d;
+    }
+
+    // ---------- formulário de evento ----------
+
+    public static String eventoEditar(String evento, String jogos) {
+        MainActivity a = ativa;
+        if (a == null) return "";
+        a.runOnUiThread(() -> a.dialogoEvento(evento, jogos));
+        return "";
+    }
+
+    private android.widget.Spinner lista(String[] itens, int sel) {
+        android.widget.Spinner sp = new android.widget.Spinner(this);
+        android.widget.ArrayAdapter<String> ad = new android.widget.ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, itens);
+        sp.setAdapter(ad);
+        if (sel >= 0 && sel < itens.length) sp.setSelection(sel);
+        return sp;
+    }
+
+    private TextView rotulo(String t) {
+        TextView v = new TextView(this);
+        v.setText(t);
+        v.setTextSize(13);
+        v.setPadding(0, dp(12), 0, dp(2));
+        return v;
+    }
+
+    private void dialogoEvento(String eventoJson, String jogosJson) {
+        if (!criador) {
+            Toast.makeText(this, "Só o criador do app pode criar eventos.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        JSONObject ev;
+        try { ev = eventoJson == null || eventoJson.isEmpty() ? new JSONObject() : new JSONObject(eventoJson); }
+        catch (Throwable t) { ev = new JSONObject(); }
+        final String id = ev.optString("id");
+        final long criadoMs = ev.optLong("criado_ms", 0);
+
+        // jogos para escolher: [[chave, nome], ...]
+        List<String> chaves = new ArrayList<>();
+        List<String> nomes = new ArrayList<>();
+        try {
+            JSONArray js = new JSONArray(jogosJson);
+            for (int i = 0; i < js.length(); i++) {
+                JSONArray j = js.getJSONArray(i);
+                chaves.add(j.getString(0));
+                nomes.add(j.getString(1));
+            }
+        } catch (Throwable ignorar) { }
+        if (!ev.optString("jogo_chave").isEmpty() && !chaves.contains(ev.optString("jogo_chave"))) {
+            chaves.add(ev.optString("jogo_chave"));
+            nomes.add(ev.optString("jogo_nome", ev.optString("jogo_chave")));
+        }
+
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(22), dp(8), dp(22), dp(8));
+
+        final EditText nome = campo("Nome do evento", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        nome.setText(ev.optString("nome"));
+        l.addView(nome);
+        final EditText descricao = campo("Descrição", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        descricao.setSingleLine(false);
+        descricao.setMinLines(2);
+        descricao.setText(ev.optString("descricao"));
+        l.addView(descricao);
+        final EditText recompensas = campo("Recompensas (ex.: 1º lugar: ...)", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        recompensas.setSingleLine(false);
+        recompensas.setMinLines(2);
+        recompensas.setText(ev.optString("recompensas"));
+        l.addView(recompensas);
+
+        final String[] tipos = {"dia", "semana", "mes", "periodo", "tudo"};
+        int tipoSel = java.util.Arrays.asList(tipos).indexOf(ev.optString("tipo", "semana"));
+        l.addView(rotulo("Período"));
+        final android.widget.Spinner tipo = lista(new String[]{
+                "Um dia", "Uma semana (segunda a domingo)", "Um mês",
+                "Período (escolher início e fim)", "Tempo total (até uma data ou sem fim)"}, tipoSel < 0 ? 1 : tipoSel);
+        l.addView(tipo);
+
+        final Calendar[] ini = {lerDia(ev.optString("inicio", fmtDia(Calendar.getInstance())))};
+        final Calendar[] fim = {lerDia(ev.optString("fim", fmtDia(maisDias(Calendar.getInstance(), 6))))};
+        final android.widget.Button bIni = new android.widget.Button(this);
+        final android.widget.Button bFim = new android.widget.Button(this);
+        final android.widget.CheckBox semFim = new android.widget.CheckBox(this);
+        semFim.setText("Sem data para acabar");
+        semFim.setChecked("tudo".equals(ev.optString("tipo")) && ev.optString("fim").isEmpty());
+        l.addView(bIni);
+        l.addView(bFim);
+        l.addView(semFim);
+
+        l.addView(rotulo("O que conta"));
+        final android.widget.Spinner oQue = lista(new String[]{"Tempo total (todos os jogos)", "Um jogo"},
+                ev.optString("jogo_chave").isEmpty() ? 0 : 1);
+        l.addView(oQue);
+        final android.widget.Spinner jogo = lista(nomes.isEmpty() ? new String[]{"(nenhum jogo ainda)"}
+                : nomes.toArray(new String[0]), Math.max(0, chaves.indexOf(ev.optString("jogo_chave"))));
+        l.addView(jogo);
+
+        final String[] plats = {"todas", "mobile", "steam", "psn"};
+        int platSel = java.util.Arrays.asList(plats).indexOf(ev.optString("plataforma", "todas"));
+        l.addView(rotulo("Plataforma"));
+        final android.widget.Spinner plat = lista(new String[]{"Todas", "Mobile", "Steam", "PlayStation"},
+                platSel < 0 ? 0 : platSel);
+        l.addView(plat);
+
+        l.addView(rotulo("Quantos vencedores (1 a 10)"));
+        final EditText venc = campo("3", InputType.TYPE_CLASS_NUMBER);
+        venc.setText(String.valueOf(ev.optInt("vencedores", 3)));
+        l.addView(venc);
+
+        // mostra só o que faz sentido para o tipo escolhido
+        final Runnable atualizar = () -> {
+            String t = tipos[tipo.getSelectedItemPosition()];
+            boolean temFim = t.equals("periodo") || t.equals("tudo");
+            String rotIni;
+            switch (t) {
+                case "dia": rotIni = "Dia: "; break;
+                case "semana": rotIni = "Qualquer dia da semana: "; break;
+                case "mes": rotIni = "Qualquer dia do mês: "; break;
+                case "tudo": rotIni = "Aparece a partir de: "; break;
+                default: rotIni = "Começa em: ";
+            }
+            bIni.setText(rotIni + fmtDiaBr(ini[0]));
+            bFim.setText("Termina em: " + fmtDiaBr(fim[0]) + " (inclusive)");
+            bFim.setVisibility(temFim && !(t.equals("tudo") && semFim.isChecked())
+                    ? android.view.View.VISIBLE : android.view.View.GONE);
+            semFim.setVisibility(t.equals("tudo") ? android.view.View.VISIBLE : android.view.View.GONE);
+            jogo.setVisibility(oQue.getSelectedItemPosition() == 1
+                    ? android.view.View.VISIBLE : android.view.View.GONE);
+        };
+        android.widget.AdapterView.OnItemSelectedListener mudou = new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> p, android.view.View v, int pos, long id2) { atualizar.run(); }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p) { }
+        };
+        tipo.setOnItemSelectedListener(mudou);
+        oQue.setOnItemSelectedListener(mudou);
+        semFim.setOnCheckedChangeListener((b, v) -> atualizar.run());
+        bIni.setOnClickListener(v -> new android.app.DatePickerDialog(this, (dp, a, m, d) -> {
+            ini[0].set(a, m, d);
+            atualizar.run();
+        }, ini[0].get(Calendar.YEAR), ini[0].get(Calendar.MONTH), ini[0].get(Calendar.DAY_OF_MONTH)).show());
+        bFim.setOnClickListener(v -> new android.app.DatePickerDialog(this, (dp, a, m, d) -> {
+            fim[0].set(a, m, d);
+            atualizar.run();
+        }, fim[0].get(Calendar.YEAR), fim[0].get(Calendar.MONTH), fim[0].get(Calendar.DAY_OF_MONTH)).show());
+        atualizar.run();
+
+        android.widget.ScrollView rolagem = new android.widget.ScrollView(this);
+        rolagem.addView(l);
+        AlertDialog d = new AlertDialog.Builder(this, temaDialogo())
+                .setTitle(id.isEmpty() ? "Novo evento" : "Editar evento")
+                .setView(rolagem)
+                .setPositiveButton("Salvar", null)
+                .setNegativeButton("Cancelar", null)
+                .create();
+        d.setOnShowListener(x -> d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String n = nome.getText().toString().trim();
+            if (n.isEmpty()) { nome.setError("Dê um nome ao evento"); return; }
+            String t = tipos[tipo.getSelectedItemPosition()];
+            Calendar a, b;
+            switch (t) {
+                case "dia": a = copia(ini[0]); b = copia(ini[0]); break;
+                case "semana": {
+                    int dow = ini[0].get(Calendar.DAY_OF_WEEK); // domingo = 1, segunda = 2
+                    a = maisDias(ini[0], -((dow + 5) % 7));
+                    b = maisDias(a, 6);
+                    break;
+                }
+                case "mes": {
+                    a = copia(ini[0]);
+                    a.set(Calendar.DAY_OF_MONTH, 1);
+                    b = copia(a);
+                    b.set(Calendar.DAY_OF_MONTH, a.getActualMaximum(Calendar.DAY_OF_MONTH));
+                    break;
+                }
+                case "tudo": a = copia(ini[0]); b = semFim.isChecked() ? null : copia(fim[0]); break;
+                default: a = copia(ini[0]); b = copia(fim[0]);
+            }
+            if (b != null && b.before(a)) { Toast.makeText(this, "O fim tem que ser depois do início.", Toast.LENGTH_LONG).show(); return; }
+            int vencedores = 3;
+            try { vencedores = Math.max(1, Math.min(10, Integer.parseInt(venc.getText().toString().trim()))); }
+            catch (Throwable ignorar) { }
+            boolean umJogo = oQue.getSelectedItemPosition() == 1 && !chaves.isEmpty();
+            int j = Math.min(jogo.getSelectedItemPosition(), Math.max(0, chaves.size() - 1));
+
+            long agora = System.currentTimeMillis();
+            long inicioMs = lerDia(fmtDia(a)).getTimeInMillis();
+            long fimMs = b == null ? 0 : lerDia(fmtDia(maisDias(b, 1))).getTimeInMillis();
+            Map<String, Object> doc = new HashMap<>();
+            doc.put("nome", n);
+            doc.put("descricao", descricao.getText().toString().trim());
+            doc.put("recompensas", recompensas.getText().toString().trim());
+            doc.put("tipo", t);
+            doc.put("inicio", fmtDia(a));
+            doc.put("fim", b == null ? "" : fmtDia(b));
+            doc.put("inicio_ms", inicioMs);
+            doc.put("fim_ms", fimMs);
+            doc.put("plataforma", plats[plat.getSelectedItemPosition()]);
+            doc.put("jogo_chave", umJogo ? chaves.get(j) : "");
+            doc.put("jogo_nome", umJogo ? nomes.get(j) : "");
+            doc.put("vencedores", vencedores);
+            doc.put("criado_ms", criadoMs > 0 ? criadoMs : agora);
+            doc.put("autor", criadorUid);
+            // avisos: só avisa o que ainda vai acontecer
+            doc.put("avisado_inicio", inicioMs <= agora);
+            doc.put("avisado_fim", fimMs == 0 || fimMs <= agora);
+
+            v.setEnabled(false);
+            FirebaseFirestore db = FirebaseFirestore.getInstance();
+            com.google.android.gms.tasks.OnSuccessListener<Object> ok = r -> {
+                eventosVersao++;
+                d.dismiss();
+                Toast.makeText(this, "Evento salvo", Toast.LENGTH_SHORT).show();
+            };
+            com.google.android.gms.tasks.OnFailureListener falha = e -> {
+                v.setEnabled(true);
+                String m = mensagemDe(e);
+                if (m.contains("PERMISSION_DENIED") || m.toLowerCase().contains("permission")) {
+                    m = "Só o criador do app pode salvar eventos (confira o abysshub_admins e as regras).";
+                }
+                Toast.makeText(this, m, Toast.LENGTH_LONG).show();
+            };
+            if (id.isEmpty()) {
+                db.collection(EVENTOS).add(doc).addOnSuccessListener(ok).addOnFailureListener(falha);
+            } else {
+                db.collection(EVENTOS).document(id).set(doc).addOnSuccessListener(ok).addOnFailureListener(falha);
+            }
+        }));
+        d.show();
+    }
+
+    public static String eventoApagar(String id) {
+        MainActivity a = ativa;
+        if (a == null || id == null || id.isEmpty()) return "";
+        a.runOnUiThread(() -> new AlertDialog.Builder(a, a.temaDialogo())
+                .setTitle("Apagar evento?")
+                .setMessage("O evento some para todo mundo. Não dá para desfazer.")
+                .setPositiveButton("Apagar", (dd, w) -> FirebaseFirestore.getInstance().collection(EVENTOS).document(id)
+                        .delete()
+                        .addOnSuccessListener(r -> {
+                            eventosVersao++;
+                            Toast.makeText(a, "Evento apagado", Toast.LENGTH_SHORT).show();
+                        })
+                        .addOnFailureListener(e -> Toast.makeText(a, mensagemDe(e), Toast.LENGTH_LONG).show()))
+                .setNegativeButton("Cancelar", null)
+                .show());
+        return "";
+    }
+
+    // ---------- avisos (notificações) dos eventos ----------
+
+    private void prepararAvisos() {
+        try {
+            android.app.NotificationChannel canal = new android.app.NotificationChannel(
+                    "eventos", "Eventos", android.app.NotificationManager.IMPORTANCE_DEFAULT);
+            canal.setDescription("Quando um evento começa ou termina");
+            getSystemService(android.app.NotificationManager.class).createNotificationChannel(canal);
+            if (firebasePronto(this)) FirebaseMessaging.getInstance().subscribeToTopic("abysshub_eventos");
+            if (Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                SharedPreferences p = getSharedPreferences("abysshub_avisos", MODE_PRIVATE);
+                if (!p.getBoolean("pediu", false)) {
+                    p.edit().putBoolean("pediu", true).apply();
+                    requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 77);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "avisos", t);
+        }
+    }
+
+    // =================================================================
     // PlayStation — quem lê a PSN é o servidor do AbyssHub (Cloud Functions), com uma conta "robô".
     // A pessoa só prova que a conta é dela colocando um código no "Sobre" do perfil.
     // =================================================================
@@ -1688,6 +2124,7 @@ public class MainActivity extends NativeActivity {
             WriteBatch b = db.batch();
             for (DocumentSnapshot d : pares.getDocuments()) b.delete(d.getReference());
             b.delete(db.collection(PESSOAS).document(u.getUid()));
+            b.delete(db.collection(HISTORICO).document(u.getUid()));
             Tasks.await(b.commit(), 20, TimeUnit.SECONDS);
             return "";
         } catch (Throwable t) {

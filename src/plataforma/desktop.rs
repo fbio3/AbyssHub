@@ -23,6 +23,10 @@ pub struct PlataformaDesktop {
     logado: Mutex<Vec<String>>,
     /// Steam e PSN de teste conectadas (índice = Fonte)
     fontes: Mutex<[bool; 2]>,
+    /// eventos de teste (JSON) e quantas vezes mudaram
+    eventos: Mutex<(Vec<serde_json::Value>, i64)>,
+    /// dia "escolhido" no calendário de teste
+    data: Mutex<Option<String>>,
 }
 
 /// Jogos da Steam de teste: (appid, nome, minutos). "Abyss Knight" também existe no "celular"
@@ -46,6 +50,8 @@ impl PlataformaDesktop {
             pasta: PathBuf::from("dados-teste"),
             logado: Mutex::new(Vec::new()),
             fontes: Mutex::new([false; 2]),
+            eventos: Mutex::new((eventos_de_teste(), 0)),
+            data: Mutex::new(None),
         }
     }
 }
@@ -130,6 +136,7 @@ impl Plataforma for PlataformaDesktop {
                 foto: String::new(),
                 email: "teste@exemplo.com".into(),
                 provedores,
+                criador: true,
             }
         } else {
             Conta {
@@ -171,6 +178,58 @@ impl Plataforma for PlataformaDesktop {
 
     fn apagar_meus_dados(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    fn publicar_historico(&self, _json: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn historicos(&self) -> Result<String, String> {
+        Ok(historicos_de_teste().to_string())
+    }
+
+    fn eventos(&self) -> Result<String, String> {
+        Ok(serde_json::Value::Array(self.eventos.lock().unwrap().0.clone()).to_string())
+    }
+
+    fn eventos_versao(&self) -> i64 {
+        self.eventos.lock().unwrap().1
+    }
+
+    /// No PC não tem formulário: "Criar evento" cria um evento de teste desta semana,
+    /// e "Editar" troca o nome.
+    fn evento_editar(&self, evento: &str, _jogos: &str) {
+        let mut g = self.eventos.lock().unwrap();
+        let atual: serde_json::Value = serde_json::from_str(evento).unwrap_or_default();
+        if let Some(id) = atual.get("id").and_then(|x| x.as_str()) {
+            for e in g.0.iter_mut() {
+                if e.get("id").and_then(|x| x.as_str()) == Some(id) {
+                    e["nome"] = serde_json::json!(format!("{} (editado)", e["nome"].as_str().unwrap_or("")));
+                }
+            }
+        } else {
+            let n = g.0.len() + 1;
+            let hoje = crate::historico::hoje();
+            let (ini, fim) = crate::historico::TipoPeriodo::Semana.intervalo(hoje);
+            g.0.push(evento_teste(&format!("teste{n}"), &format!("Evento de teste {n}"), "semana", ini, fim, ""));
+        }
+        g.1 += 1;
+    }
+
+    fn evento_apagar(&self, id: &str) {
+        let mut g = self.eventos.lock().unwrap();
+        g.0.retain(|e| e.get("id").and_then(|x| x.as_str()) != Some(id));
+        g.1 += 1;
+    }
+
+    /// No PC o "calendário" escolhe sempre 3 semanas atrás.
+    fn escolher_data(&self, _atual: &str) {
+        let d = crate::historico::mais_dias(crate::historico::hoje(), -21);
+        *self.data.lock().unwrap() = Some(crate::historico::fmt_dia(d));
+    }
+
+    fn data_escolhida(&self) -> Option<String> {
+        self.data.lock().unwrap().take()
     }
 
     fn fonte_estado(&self, fonte: Fonte) -> EstadoFonte {
@@ -294,4 +353,85 @@ impl Plataforma for PlataformaDesktop {
         itens.sort_by_key(|v| -v["ms"].as_i64().unwrap_or(0));
         Ok(serde_json::Value::Array(itens).to_string())
     }
+}
+
+/// Um evento de teste no formato do Firebase.
+fn evento_teste(
+    id: &str,
+    nome: &str,
+    tipo: &str,
+    ini: chrono::NaiveDate,
+    fim: chrono::NaiveDate,
+    jogo: &str,
+) -> serde_json::Value {
+    use crate::historico::{fmt_dia, inicio_ms, mais_dias};
+    serde_json::json!({
+        "id": id, "nome": nome,
+        "descricao": "Quem jogar mais nesse período ganha. Evento só para testar no PC.",
+        "recompensas": "1º lugar: moldura dourada\n2º lugar: moldura prateada\n3º lugar: moldura de bronze",
+        "tipo": tipo, "inicio": fmt_dia(ini), "fim": fmt_dia(fim),
+        "inicio_ms": inicio_ms(ini), "fim_ms": inicio_ms(mais_dias(fim, 1)),
+        "plataforma": "todas",
+        "jogo_chave": crate::ranking::chave_jogo(jogo, ""), "jogo_nome": jogo,
+        "vencedores": 3, "criado_ms": agora_ms(),
+    })
+}
+
+fn eventos_de_teste() -> Vec<serde_json::Value> {
+    use crate::historico::{hoje, mais_dias, TipoPeriodo};
+    let h = hoje();
+    let (si, sf) = TipoPeriodo::Semana.intervalo(h);
+    let (pi, pf) = TipoPeriodo::Semana.anterior(si);
+    let futuro = mais_dias(sf, 1);
+    vec![
+        evento_teste("a", "Maratona da semana", "semana", si, sf, ""),
+        evento_teste("b", "Rei do Abyss Knight", "semana", pi, pf, "Abyss Knight"),
+        evento_teste("c", "Desafio do fim de semana", "periodo", futuro, mais_dias(futuro, 1), ""),
+    ]
+}
+
+/// Histórico de teste: as mesmas pessoas do ranking de teste, ~120 dias para trás.
+fn historicos_de_teste() -> serde_json::Value {
+    use crate::historico::{fmt_dia, hoje, mais_dias};
+    let pessoas = [
+        ("eu", "Você (teste)"),
+        ("a", "Riko"),
+        ("b", "Reg Explorador"),
+        ("c", "Nanachi"),
+        ("d", "Ozen"),
+        ("e", "Maruruk"),
+    ];
+    let h = hoje();
+    let mut v = Vec::new();
+    for (i, (uid, nome)) in pessoas.iter().enumerate() {
+        let mut dias = serde_json::Map::new();
+        let mut jogos = serde_json::Map::new();
+        for k in 0..120i64 {
+            // uma conta "aleatória" fixa, para cada um ganhar alguns dias
+            let x = (k * 7 + i as i64 * 13 + (k * k + i as i64) % 11) % 17;
+            if x < 4 {
+                continue;
+            }
+            let ms = x * 9 * 60_000;
+            let j = (k as usize + i) % 4;
+            let dia = fmt_dia(mais_dias(h, -k));
+            dias.insert(dia.clone(), serde_json::json!({ "todas": ms, "mobile": ms }));
+            let chave = crate::ranking::chave_jogo(APPS[j].1, APPS[j].0);
+            let mut porjogo = serde_json::Map::new();
+            porjogo.insert(chave, serde_json::json!({ "todas": ms, "mobile": ms }));
+            jogos.insert(dia, serde_json::Value::Object(porjogo));
+        }
+        let mut info = serde_json::Map::new();
+        for a in APPS.iter().take(4) {
+            info.insert(
+                crate::ranking::chave_jogo(a.1, a.0),
+                serde_json::json!({ "nome": a.1, "pacote": a.0, "plats": ["mobile"] }),
+            );
+        }
+        v.push(serde_json::json!({
+            "uid": uid, "nome": nome, "foto": "", "atualizado_ms": agora_ms(),
+            "dias": dias, "jogos": jogos, "info": info,
+        }));
+    }
+    serde_json::Value::Array(v)
 }

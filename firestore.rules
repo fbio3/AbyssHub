@@ -43,6 +43,27 @@ service cloud.firestore {
                        || (request.resource.data.jpg is string && request.resource.data.jpg.size() < 300000));
     }
 
+    // Histórico por dia de cada pessoa (Placar e Eventos). Todo mundo logado lê; cada um escreve o seu.
+    match /abysshub_historico/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && request.resource.data.uid == uid;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Quem é criador do app (crie o documento com o seu uid pelo console do Firebase).
+    // Ninguém escreve aqui pelo app.
+    match /abysshub_admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Eventos: todo mundo logado lê; só quem está em abysshub_admins cria, edita e apaga.
+    match /abysshub_eventos/{id} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && exists(/databases/$(database)/documents/abysshub_admins/$(request.auth.uid));
+    }
+
     // Ícones dos jogos (para quem não tem o jogo instalado ver). Só cria, não troca.
     match /abysshub_icones/{pacote} {
       allow read: if request.auth != null;

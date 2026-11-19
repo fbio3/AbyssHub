@@ -1,5 +1,14 @@
 # Mudanças do AbyssHub
 
+## v3.0.0 — Placar e Eventos
+
+- **Nova aba Placar**: os 3 primeiros de cada dia, semana (segunda a domingo) ou mês, do mais recente que acabou para o mais antigo. Mais períodos aparecem conforme você desce a tela.
+- No Placar dá para filtrar por plataforma, por pessoas, pessoa + jogo ou um jogo, e escolher uma data no calendário. Em **Tudo**, aparece quem está na frente agora.
+- **Nova aba Eventos**: desafios com nome, descrição, recompensas e período (um dia, uma semana, um mês, um período ou tempo total). Pode ser sobre o tempo total ou um jogo, em todas as plataformas ou só em uma, com 1 a 10 vencedores (3 por padrão).
+- Enquanto o evento acontece, aparece quem está na frente; quando acaba, os vencedores.
+- **Avisos**: você recebe uma notificação quando um evento começa e quando termina.
+- O app agora guarda no Firebase quanto você jogou em cada dia (até ~1 ano), para o Placar e os Eventos. "Sair e tirar meus dados do Leaderboard" apaga isso também.
+
 ## v2.2.0 — PlayStation
 
 - **Jogos da PlayStation (PS4 e PS5)**: em Configurações > PlayStation, digite o seu ID online, coloque o código que o app mostra no "Sobre" do seu perfil e toque em Verificar. Você não precisa dar a senha; o perfil só precisa estar público.

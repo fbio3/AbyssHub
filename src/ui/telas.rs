@@ -56,6 +56,8 @@ impl AbyssHubApp {
                     Aba::Inicio => s.tela_inicio(ui, topo),
                     Aba::Jogos => s.tela_jogos(ui, topo),
                     Aba::Leaderboard => s.tela_leaderboard(ui, topo),
+                    Aba::Placar => s.tela_placar(ui, topo),
+                    Aba::Eventos => s.tela_eventos(ui, topo),
                     Aba::Historico => s.tela_historico(ui, topo),
                 },
             });
@@ -1001,6 +1003,8 @@ impl AbyssHubApp {
             (Aba::Inicio, "Início", Icone::Casa),
             (Aba::Jogos, "Jogos", Icone::Controle),
             (Aba::Leaderboard, "Leaderboard", Icone::Trofeu),
+            (Aba::Placar, "Placar", Icone::Medalha),
+            (Aba::Eventos, "Eventos", Icone::Bandeira),
             (Aba::Historico, "Histórico", Icone::Calendario),
         ];
         let w = r.width() / abas.len() as f32;
@@ -1017,15 +1021,19 @@ impl AbyssHubApp {
             );
             let pt = ui.painter();
             let c = pos2(cel.center().x, cel.top() + 20.0);
-            let pilula = Rect::from_center_size(c, vec2(60.0, 32.0) * (1.0 - 0.08 * aperto));
+            let pilula = Rect::from_center_size(c, vec2((w - 6.0).min(60.0), 32.0) * (1.0 - 0.08 * aperto));
             pt.rect_filled(pilula, CornerRadius::same(16), alfa(self.p.tab_on, on));
             let cor = misturar_cor(self.p.muted, self.p.text, on);
             desenho::icone(pt, ic, c, 22.0 * (1.0 - 0.08 * aperto), cor, 0.0);
+            // com 6 abas o nome pode não caber: diminui a letra até caber
+            let peso = if on > 0.5 { Peso::Negrito } else { Peso::Semi };
+            let largura = pt.layout_no_wrap(nome.to_string(), fonte(12.5, peso), cor).size().x;
+            let tam = if largura > w - 4.0 { (12.5 * (w - 4.0) / largura).max(8.5) } else { 12.5 };
             pt.text(
                 pos2(c.x, cel.top() + 43.0),
                 Align2::CENTER_CENTER,
                 nome,
-                fonte(12.5, if on > 0.5 { Peso::Negrito } else { Peso::Semi }),
+                fonte(tam, peso),
                 cor,
             );
             if resp.clicked() {

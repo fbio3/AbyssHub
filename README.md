@@ -53,6 +53,12 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 - Três jeitos de ver: **por pessoa** (com o jogo que ela mais jogou), **por pessoa + jogo** e **por jogo**
 - Períodos: **Hoje**, **Semana** (padrão), **Mês** e **Tudo**
 - Filtro de plataforma: **Todas**, **Mobile**, **Steam** ou **PSN**, com um símbolo mostrando de onde é cada jogo
+
+### Placar e Eventos
+
+- **Placar**: quem ganhou cada dia, semana (segunda a domingo) ou mês, do mais recente para trás, ou de uma data que você escolher
+- **Eventos**: desafios com recompensas, com quem está na frente ao vivo e os vencedores no final
+- Notificação quando um evento começa e quando termina
 - Pódio com os 3 primeiros e a sua posição destacada
 - **Atualiza sozinho a cada minuto**
 - Entre com **Google** ou com **e-mail e senha** (e dá para conectar os dois na mesma conta); só aparece no ranking quem entrou
@@ -88,6 +94,7 @@ Depois disso, as próximas versões chegam pelo próprio app.
 | **Ver apps instalados** | Mostrar o nome e o ícone de cada jogo e reconhecer quais apps são jogos. |
 | **Internet** | Leaderboard, fotos, horas da Steam e da PlayStation (se você conectar) e procurar atualizações. |
 | **Instalar apps** | Instalar as atualizações do próprio AbyssHub (o Android sempre pede a sua confirmação). |
+| **Notificações** | Avisar quando um evento começa ou termina. Você pode negar ou desligar quando quiser. |
 
 ## Privacidade
 

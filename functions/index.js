@@ -11,6 +11,8 @@
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { getMessaging } from "firebase-admin/messaging";
 import { defineSecret } from "firebase-functions/params";
 import { logger } from "firebase-functions";
 import {
@@ -43,6 +45,13 @@ const opcoes = {
 // Acesso do robô
 // ---------------------------------------------------------------------------
 
+/** O NPSSO guardado, aceitando também o texto inteiro da página ({"npsso":"..."}) ou com aspas. */
+function npsso() {
+  const t = String(PSN_NPSSO.value() ?? "");
+  const m = /[A-Za-z0-9]{64}/.exec(t);
+  return m ? m[0] : t.trim();
+}
+
 /** Devolve { accessToken } válido, renovando quando precisa. */
 async function acessoRobo() {
   const agora = Date.now();
@@ -60,10 +69,15 @@ async function acessoRobo() {
   }
   if (!tokens) {
     try {
-      const codigo = await exchangeNpssoForAccessCode(PSN_NPSSO.value().trim());
+      const n = npsso();
+      if (n.length !== 64) {
+        logger.error(`O NPSSO guardado tem ${n.length} caracteres (deveria ter 64). Guarde de novo só o código.`);
+        throw new Error("NPSSO com tamanho errado");
+      }
+      const codigo = await exchangeNpssoForAccessCode(n);
       tokens = await exchangeAccessCodeForAuthTokens(codigo);
     } catch (e) {
-      logger.error("O NPSSO do robô não funcionou (vencido ou errado)", e);
+      logger.error(`O NPSSO do robô não funcionou (vencido ou errado): ${String(e?.message ?? e)}`);
       throw new HttpsError(
         "unavailable",
         "O servidor da PlayStation está em manutenção. Tente de novo mais tarde.",
@@ -254,3 +268,65 @@ export const psnDesconectar = onCall(opcoes, async (req) => {
   await db.collection(CONEXOES).doc(uid).delete();
   return { ok: true };
 });
+
+// ---------------------------------------------------------------------------
+// Avisos dos eventos (notificação quando um evento começa e quando termina)
+// ---------------------------------------------------------------------------
+
+const EVENTOS = db.collection("abysshub_eventos");
+const TOPICO_EVENTOS = "abysshub_eventos"; // o app se inscreve nesse tópico
+
+async function avisar(titulo, texto) {
+  await getMessaging().send({
+    topic: TOPICO_EVENTOS,
+    notification: { title: titulo, body: texto },
+    android: { priority: "high", notification: { channelId: "eventos", icon: "ic_aviso" } },
+  });
+}
+
+function resumo(e) {
+  const t = String(e.descricao ?? "").trim();
+  if (t) return t.length > 140 ? `${t.slice(0, 137)}...` : t;
+  return e.jogo_nome ? `Quem jogar mais ${e.jogo_nome} ganha!` : "Quem jogar mais ganha!";
+}
+
+/** A cada 15 minutos: avisa os eventos que começaram ou terminaram. */
+export const avisarEventos = onSchedule(
+  {
+    schedule: "every 15 minutes",
+    region: "southamerica-east1",
+    timeZone: "America/Sao_Paulo",
+    maxInstances: 1,
+    memory: "256MiB",
+  },
+  async () => {
+    const agora = Date.now();
+
+    const comecar = await EVENTOS.where("avisado_inicio", "==", false).get();
+    for (const d of comecar.docs) {
+      const e = d.data();
+      if (!(Number(e.inicio_ms) <= agora)) continue;
+      const jaAcabou = Number(e.fim_ms) > 0 && Number(e.fim_ms) <= agora;
+      if (!jaAcabou) {
+        try {
+          await avisar(`Começou: ${e.nome}`, resumo(e));
+        } catch (err) {
+          logger.warn("Não deu para avisar o começo do evento", d.id, String(err?.message ?? err));
+        }
+      }
+      await d.ref.update({ avisado_inicio: true });
+    }
+
+    const terminar = await EVENTOS.where("avisado_fim", "==", false).get();
+    for (const d of terminar.docs) {
+      const e = d.data();
+      if (!(Number(e.fim_ms) > 0 && Number(e.fim_ms) <= agora)) continue;
+      try {
+        await avisar(`Terminou: ${e.nome}`, "Veja quem ganhou na aba Eventos do AbyssHub.");
+      } catch (err) {
+        logger.warn("Não deu para avisar o fim do evento", d.id, String(err?.message ?? err));
+      }
+      await d.ref.update({ avisado_fim: true });
+    }
+  },
+);

@@ -43,6 +43,8 @@ pub struct Conta {
     pub email: String,
     /// Formas de entrar ligadas à conta: "google.com", "password".
     pub provedores: Vec<String>,
+    /// É a conta do criador do app (pode criar eventos).
+    pub criador: bool,
 }
 
 /// Imagens que o app pede ao sistema (sempre quadradas, RGBA pré-multiplicado).
@@ -88,6 +90,34 @@ pub trait Plataforma: Send + Sync {
     fn publicar(&self, _json: &str) -> Result<(), String> {
         Err("Leaderboard indisponível".into())
     }
+    /// Envia o seu histórico por dia (JSON montado em historico.rs).
+    fn publicar_historico(&self, _json: &str) -> Result<(), String> {
+        Err("Leaderboard indisponível".into())
+    }
+    /// O histórico por dia de todo mundo (lista em JSON), para o Placar e os Eventos.
+    fn historicos(&self) -> Result<String, String> {
+        Err("Leaderboard indisponível".into())
+    }
+    /// Os eventos (lista em JSON).
+    fn eventos(&self) -> Result<String, String> {
+        Err("Leaderboard indisponível".into())
+    }
+    /// Muda quando um evento é criado, editado ou apagado (para recarregar a lista).
+    fn eventos_versao(&self) -> i64 {
+        0
+    }
+    /// Abre o formulário de evento (só o criador). `evento` vazio = novo. `jogos` = lista de
+    /// [chave, nome] para escolher.
+    fn evento_editar(&self, _evento: &str, _jogos: &str) {}
+    /// Pergunta e apaga o evento.
+    fn evento_apagar(&self, _id: &str) {}
+    /// Abre o calendário para escolher um dia ("AAAA-MM-DD" = dia que já vem marcado).
+    fn escolher_data(&self, _atual: &str) {}
+    /// O dia escolhido no calendário, uma vez só ("AAAA-MM-DD"). None = nada novo.
+    fn data_escolhida(&self) -> Option<String> {
+        None
+    }
+
     /// Busca o ranking. `chave` é a chave do jogo (modo "jogo"). Devolve uma lista em JSON.
     fn buscar_ranking(
         &self,
@@ -217,6 +247,7 @@ pub fn ler_conta(json: &str) -> Conta {
         foto: t("foto"),
         email: t("email"),
         provedores,
+        criador: v.get("criador").and_then(|x| x.as_bool()).unwrap_or(false),
     }
 }
 
