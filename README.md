@@ -59,6 +59,7 @@ O app tem quatro abas: **Início · Jogos · Leaderboard · Histórico**.
 - **Placar**: quem ganhou cada dia, semana (segunda a domingo) ou mês, do mais recente para trás, ou de uma data que você escolher
 - **Eventos**: desafios com recompensas, com quem está na frente ao vivo e os vencedores no final
 - Notificação quando um evento começa e quando termina
+- **Molduras** para a foto de perfil (Ruby, Diamante e Bronze), ganhas nos eventos
 - Pódio com os 3 primeiros e a sua posição destacada
 - **Atualiza sozinho a cada minuto**
 - Entre com **Google** ou com **e-mail e senha** (e dá para conectar os dois na mesma conta); só aparece no ranking quem entrou

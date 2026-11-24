@@ -59,6 +59,7 @@ import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldPath;
+import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.QuerySnapshot;
@@ -166,6 +167,9 @@ public class MainActivity extends NativeActivity {
                 garantirPerfil(u.getUid());
                 checarCriador(u.getUid());
                 o.put("criador", criador && u.getUid().equals(criadorUid));
+                ouvirMolduras(u.getUid());
+                o.put("moldura", molduraEfetiva(u));
+                o.put("molduras", new JSONArray(moldurasTem));
                 o.put("estado", "logado");
                 o.put("uid", u.getUid());
                 o.put("nome", nomeEfetivo(u));
@@ -230,6 +234,65 @@ public class MainActivity extends NativeActivity {
     private static volatile String perfilNome = "";
     /** 0 = foto do Google, -1 = sem foto, maior que 0 = foto escolhida (versão) */
     private static volatile long perfilFotoVer = 0;
+    /** Moldura que a pessoa está usando ("" = nenhuma). */
+    private static volatile String perfilMoldura = "";
+
+    // Molduras que a pessoa tem (abysshub_molduras/{uid}, só o servidor escreve)
+    private static final String MOLDURAS = "abysshub_molduras";
+    private static volatile List<String> moldurasTem = new ArrayList<>();
+    private static volatile String moldurasUid = "";
+    private static ListenerRegistration moldurasEscuta = null;
+
+    private static String molduraEfetiva(FirebaseUser u) {
+        return perfilUid.equals(u.getUid()) ? perfilMoldura : "";
+    }
+
+    /** Fica ouvindo as molduras da conta (chegam sozinhas quando a pessoa ganha um evento). */
+    private static synchronized void ouvirMolduras(String uid) {
+        if (uid.equals(moldurasUid)) return;
+        if (moldurasEscuta != null) moldurasEscuta.remove();
+        moldurasUid = uid;
+        moldurasTem = new ArrayList<>();
+        try {
+            moldurasEscuta = FirebaseFirestore.getInstance().collection(MOLDURAS).document(uid)
+                    .addSnapshotListener((d, e) -> {
+                        if (d == null || !uid.equals(moldurasUid)) return;
+                        List<String> v = new ArrayList<>();
+                        Object tem = d.get("tem");
+                        if (tem instanceof List) for (Object x : (List<?>) tem) if (x instanceof String) v.add((String) x);
+                        moldurasTem = v;
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "molduras", t);
+        }
+    }
+
+    private static synchronized void pararMolduras() {
+        if (moldurasEscuta != null) moldurasEscuta.remove();
+        moldurasEscuta = null;
+        moldurasUid = "";
+        moldurasTem = new ArrayList<>();
+    }
+
+    /** Usa a moldura (precisa ter ganhado). "" = sem moldura. Devolve "" se deu certo. */
+    public static String usarMoldura(String id) {
+        try {
+            FirebaseUser u = FirebaseAuth.getInstance().getCurrentUser();
+            if (u == null) return "Entre na sua conta primeiro";
+            if (!id.isEmpty() && !moldurasTem.contains(id)) return "Você ainda não tem essa moldura";
+            if (!perfilUid.equals(u.getUid())) carregarPerfil(u.getUid());
+            Map<String, Object> m = new HashMap<>();
+            m.put("moldura", id);
+            Tasks.await(FirebaseFirestore.getInstance().collection(PERFIS).document(u.getUid())
+                    .set(m, com.google.firebase.firestore.SetOptions.merge()), 20, TimeUnit.SECONDS);
+            perfilMoldura = id;
+            return "";
+        } catch (Throwable t) {
+            String msg = mensagemDe(t);
+            if (msg.contains("PERMISSION_DENIED")) return "Você ainda não tem essa moldura";
+            return msg;
+        }
+    }
 
     private static String nomeEfetivo(FirebaseUser u) {
         return perfilUid.equals(u.getUid()) && !perfilNome.isEmpty() ? perfilNome : nomeDe(u);
@@ -262,6 +325,7 @@ public class MainActivity extends NativeActivity {
                     FirebaseFirestore.getInstance().collection(PERFIS).document(uid).get(), 15, TimeUnit.SECONDS);
             perfilNome = texto(d, "nome").trim();
             perfilFotoVer = numero(d, "foto_ver");
+            perfilMoldura = texto(d, "moldura");
             perfilUid = uid;
         } catch (Throwable t) {
             Log.w(TAG, "perfil", t);
@@ -570,6 +634,8 @@ public class MainActivity extends NativeActivity {
         perfilUid = "";
         perfilNome = "";
         perfilFotoVer = 0;
+        perfilMoldura = "";
+        pararMolduras();
         if (a == null) return;
         a.runOnUiThread(() -> {
             try {
@@ -999,6 +1065,7 @@ public class MainActivity extends NativeActivity {
             doc.put("uid", u.getUid());
             doc.put("nome", nomeEfetivo(u));
             doc.put("foto", fotoEfetiva(u));
+            doc.put("moldura", molduraEfetiva(u));
             doc.put("atualizado_ms", System.currentTimeMillis());
             Tasks.await(FirebaseFirestore.getInstance().collection(HISTORICO).document(u.getUid()).set(doc),
                     30, TimeUnit.SECONDS);
@@ -1252,6 +1319,66 @@ public class MainActivity extends NativeActivity {
         venc.setText(String.valueOf(ev.optInt("vencedores", 3)));
         l.addView(venc);
 
+        // molduras de recompensa para cada colocação (pode ser mais de uma por lugar)
+        final String[] molduraIds = {"ruby", "diamante", "bronze"};
+        final String[] molduraNomes = {"Ruby", "Diamante", "Bronze"};
+        JSONObject premiosAntes = ev.optJSONObject("premios");
+        boolean novo = id.isEmpty();
+        l.addView(rotulo("Molduras de recompensa por colocação"));
+        @SuppressWarnings("unchecked")
+        final java.util.LinkedHashSet<String>[] escolhas = new java.util.LinkedHashSet[10];
+        final android.widget.Button[] botoesPremio = new android.widget.Button[10];
+        final android.view.View[] linhasPremio = new android.view.View[10];
+        for (int i = 0; i < 10; i++) {
+            java.util.LinkedHashSet<String> e0 = new java.util.LinkedHashSet<>();
+            if (premiosAntes != null) {
+                Object v = premiosAntes.opt(String.valueOf(i + 1));
+                if (v instanceof JSONArray) {
+                    JSONArray a = (JSONArray) v;
+                    for (int k = 0; k < a.length(); k++) if (!a.optString(k).isEmpty()) e0.add(a.optString(k));
+                } else if (v instanceof String && !((String) v).isEmpty()) {
+                    e0.add((String) v);
+                }
+            } else if (novo && i < 3) {
+                e0.add(molduraIds[i]);
+            }
+            escolhas[i] = e0;
+            final int lugar = i;
+            android.widget.Button b = new android.widget.Button(this);
+            b.setAllCaps(false);
+            botoesPremio[i] = b;
+            b.setOnClickListener(v -> {
+                boolean[] marcadas = new boolean[molduraIds.length];
+                for (int k = 0; k < molduraIds.length; k++) marcadas[k] = escolhas[lugar].contains(molduraIds[k]);
+                new AlertDialog.Builder(this, temaDialogo())
+                        .setTitle((lugar + 1) + "º lugar ganha")
+                        .setMultiChoiceItems(molduraNomes, marcadas, (dd, k, marcada) -> {
+                            if (marcada) escolhas[lugar].add(molduraIds[k]);
+                            else escolhas[lugar].remove(molduraIds[k]);
+                        })
+                        .setPositiveButton("Pronto", (dd, w) -> textoPremio(b, lugar, escolhas[lugar], molduraIds, molduraNomes))
+                        .setOnDismissListener(dd -> textoPremio(b, lugar, escolhas[lugar], molduraIds, molduraNomes))
+                        .show();
+            });
+            textoPremio(b, i, escolhas[i], molduraIds, molduraNomes);
+            linhasPremio[i] = b;
+            l.addView(b);
+        }
+        final Runnable mostrarPremios = () -> {
+            int n = 3;
+            try { n = Math.max(1, Math.min(10, Integer.parseInt(venc.getText().toString().trim()))); }
+            catch (Throwable ignorar) { }
+            for (int i = 0; i < 10; i++) {
+                linhasPremio[i].setVisibility(i < n ? android.view.View.VISIBLE : android.view.View.GONE);
+            }
+        };
+        venc.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence c, int a1, int a2, int a3) { }
+            @Override public void onTextChanged(CharSequence c, int a1, int a2, int a3) { }
+            @Override public void afterTextChanged(android.text.Editable e) { mostrarPremios.run(); }
+        });
+        mostrarPremios.run();
+
         // mostra só o que faz sentido para o tipo escolhido
         final Runnable atualizar = () -> {
             String t = tipos[tipo.getSelectedItemPosition()];
@@ -1343,6 +1470,13 @@ public class MainActivity extends NativeActivity {
             doc.put("jogo_chave", umJogo ? chaves.get(j) : "");
             doc.put("jogo_nome", umJogo ? nomes.get(j) : "");
             doc.put("vencedores", vencedores);
+            Map<String, Object> mapaPremios = new HashMap<>();
+            for (int i = 0; i < vencedores; i++) {
+                if (!escolhas[i].isEmpty()) mapaPremios.put(String.valueOf(i + 1), new ArrayList<>(escolhas[i]));
+            }
+            doc.put("premios", mapaPremios);
+            // o servidor entrega as molduras quando o evento acabar (de novo, se você editar)
+            doc.put("premiado", false);
             doc.put("criado_ms", criadoMs > 0 ? criadoMs : agora);
             doc.put("autor", criadorUid);
             // avisos: só avisa o que ainda vai acontecer
@@ -1371,6 +1505,35 @@ public class MainActivity extends NativeActivity {
             }
         }));
         d.show();
+    }
+
+    /** "1º lugar: Ruby + Diamante" no botão do formulário. */
+    private static void textoPremio(android.widget.Button b, int lugar, java.util.Set<String> escolhas,
+                                    String[] ids, String[] nomes) {
+        StringBuilder t = new StringBuilder();
+        for (int k = 0; k < ids.length; k++) {
+            if (escolhas.contains(ids[k])) t.append(t.length() == 0 ? "" : " + ").append(nomes[k]);
+        }
+        b.setText((lugar + 1) + "º lugar: " + (t.length() == 0 ? "nenhuma moldura" : t));
+    }
+
+    /** Troca só as molduras de recompensa de um evento. Devolve "" se deu certo. */
+    public static String eventoPremios(String id, String json) {
+        try {
+            if (!criador) return "Só o criador do app pode mudar as recompensas.";
+            Map<String, Object> m = new HashMap<>();
+            m.put("premios", mapa(new JSONObject(json)));
+            // o servidor entrega de novo (com as molduras novas) se o evento já acabou
+            m.put("premiado", false);
+            Tasks.await(FirebaseFirestore.getInstance().collection(EVENTOS).document(id).update(m),
+                    20, TimeUnit.SECONDS);
+            eventosVersao++;
+            return "";
+        } catch (Throwable t) {
+            String msg = mensagemDe(t);
+            if (msg.contains("PERMISSION_DENIED")) return "Só o criador do app pode mudar as recompensas.";
+            return msg;
+        }
     }
 
     public static String eventoApagar(String id) {
@@ -1859,6 +2022,7 @@ public class MainActivity extends NativeActivity {
             pessoa.put("uid", uid);
             pessoa.put("nome", nome);
             pessoa.put("foto", foto);
+            pessoa.put("moldura", molduraEfetiva(u));
             pessoa.put("dia", dia);
             pessoa.put("atualizado_ms", agora);
             for (String per : new String[]{"hoje", "semana", "tudo"}) {
@@ -1885,6 +2049,7 @@ public class MainActivity extends NativeActivity {
                     par.put("uid", uid);
                     par.put("nome", nome);
                     par.put("foto", foto);
+                    par.put("moldura", molduraEfetiva(u));
                     par.put("pacote", pacote);
                     par.put("chave", chave);
                     par.put("jogo", j.optString("nome"));
@@ -2066,6 +2231,7 @@ public class MainActivity extends NativeActivity {
         o.put("uid", texto(d, "uid"));
         o.put("nome", texto(d, "nome"));
         o.put("foto", texto(d, "foto"));
+        o.put("moldura", texto(d, "moldura"));
         o.put("ms", ms);
         o.put("atualizado_ms", atualizado);
         if (!modo.equals("pessoas")) {

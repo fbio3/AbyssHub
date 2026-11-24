@@ -44,6 +44,7 @@ impl AbyssHubApp {
             return;
         }
         let chave = match &self.detalhe {
+            _ if self.molduras_aberta => "molduras".to_string(),
             Some(p) => format!("det:{p}"),
             None => format!("{:?}", self.aba),
         };
@@ -51,6 +52,7 @@ impl AbyssHubApp {
         let dx = self.direcao * 28.0;
         self.rolagem(ui, &chave, |s, ui| {
             entrada(ui, p, dx, 0.0, |ui| match s.detalhe.clone() {
+                _ if s.molduras_aberta => s.tela_molduras(ui, topo),
                 Some(pacote) => s.tela_detalhe(ui, topo, &pacote),
                 None => match s.aba {
                     Aba::Inicio => s.tela_inicio(ui, topo),
@@ -1196,6 +1198,9 @@ impl AbyssHubApp {
                             Some(tex) => desenho::imagem_recortada(&pt, tex, r, 22.0, Color32::WHITE),
                             None => desenho::desenhar_avatar(&pt, &p, &item.nome, &item.uid, r, self.escuro, true),
                         }
+                        if desenho::moldura(&pt, &conta.moldura, r.center(), 22.0, self.an.agora, 1.0) {
+                            self.an.ativo = true;
+                        }
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.add(egui::Label::new(txt(&conta.nome, 15.0, Peso::Semi, p.text)).truncate());
@@ -1224,6 +1229,14 @@ impl AbyssHubApp {
                             self.plat.editar_foto();
                         }
                     });
+                    let rotulo_moldura = if conta.moldura.is_empty() {
+                        "Moldura da foto".to_string()
+                    } else {
+                        format!("Moldura da foto · {}", crate::molduras::nome(&conta.moldura))
+                    };
+                    if botao(ui, &mut self.an, &p, "abrir_molduras", &rotulo_moldura, false).clicked() {
+                        self.abrir_molduras();
+                    }
                     if !conta.provedores.iter().any(|x| x == "google.com")
                         && botao(ui, &mut self.an, &p, "ligar_google", "Conectar conta Google", false).clicked()
                     {

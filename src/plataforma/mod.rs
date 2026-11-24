@@ -45,6 +45,10 @@ pub struct Conta {
     pub provedores: Vec<String>,
     /// É a conta do criador do app (pode criar eventos).
     pub criador: bool,
+    /// Moldura que a pessoa está usando ("" = nenhuma).
+    pub moldura: String,
+    /// Molduras que a pessoa já ganhou.
+    pub molduras: Vec<String>,
 }
 
 /// Imagens que o app pede ao sistema (sempre quadradas, RGBA pré-multiplicado).
@@ -90,6 +94,11 @@ pub trait Plataforma: Send + Sync {
     fn publicar(&self, _json: &str) -> Result<(), String> {
         Err("Leaderboard indisponível".into())
     }
+    /// Usa a moldura `id` na foto ("" = sem moldura). Só funciona com moldura que a pessoa tem.
+    fn usar_moldura(&self, _id: &str) -> Result<(), String> {
+        Err("Leaderboard indisponível".into())
+    }
+
     /// Envia o seu histórico por dia (JSON montado em historico.rs).
     fn publicar_historico(&self, _json: &str) -> Result<(), String> {
         Err("Leaderboard indisponível".into())
@@ -109,6 +118,10 @@ pub trait Plataforma: Send + Sync {
     /// Abre o formulário de evento (só o criador). `evento` vazio = novo. `jogos` = lista de
     /// [chave, nome] para escolher.
     fn evento_editar(&self, _evento: &str, _jogos: &str) {}
+    /// Troca as molduras de recompensa de um evento (JSON {"1": ["ruby"], ...}). Só o criador.
+    fn evento_premios(&self, _id: &str, _premios: &str) -> Result<(), String> {
+        Err("Leaderboard indisponível".into())
+    }
     /// Pergunta e apaga o evento.
     fn evento_apagar(&self, _id: &str) {}
     /// Abre o calendário para escolher um dia ("AAAA-MM-DD" = dia que já vem marcado).
@@ -248,6 +261,12 @@ pub fn ler_conta(json: &str) -> Conta {
         email: t("email"),
         provedores,
         criador: v.get("criador").and_then(|x| x.as_bool()).unwrap_or(false),
+        moldura: t("moldura"),
+        molduras: v
+            .get("molduras")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
     }
 }
 

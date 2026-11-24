@@ -249,6 +249,8 @@ pub struct HistoricoPessoa {
     #[serde(default)]
     pub atualizado_ms: i64,
     #[serde(default)]
+    pub moldura: String,
+    #[serde(default)]
     pub dias: BTreeMap<String, BTreeMap<String, i64>>,
     #[serde(default)]
     pub jogos: BTreeMap<String, BTreeMap<String, BTreeMap<String, i64>>>,
@@ -293,6 +295,7 @@ fn item(h: &HistoricoPessoa, chave: Option<&str>, ms: i64) -> ItemRanking {
         ms,
         atualizado_ms: h.atualizado_ms,
         plats: info.plats,
+        moldura: h.moldura.clone(),
     }
 }
 
@@ -405,6 +408,10 @@ pub struct Evento {
     pub vencedores: i64,
     #[serde(default)]
     pub criado_ms: i64,
+    /// Molduras de recompensa por colocação: "1" -> ["ruby", "diamante"], "2" -> ["diamante"]...
+    /// (também aceita o formato antigo, com uma moldura só: "1" -> "ruby")
+    #[serde(default, deserialize_with = "ler_premios")]
+    pub premios: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -432,6 +439,14 @@ impl Evento {
             "psn" => PlataformaRanking::Psn,
             _ => PlataformaRanking::Todas,
         }
+    }
+
+    /// Molduras que a colocação `pos` (0 = 1º lugar) ganha (pode ser nenhuma).
+    pub fn premios_de(&self, pos: usize) -> Vec<&str> {
+        self.premios
+            .get(&(pos + 1).to_string())
+            .map(|v| v.iter().map(|s| s.as_str()).filter(|m| crate::molduras::existe(m)).collect())
+            .unwrap_or_default()
     }
 
     pub fn qtd_vencedores(&self) -> usize {
@@ -475,6 +490,25 @@ impl Evento {
             _ => String::new(),
         }
     }
+}
+
+/// Lê "premios" aceitando "1": "ruby" (antigo) ou "1": ["ruby", "diamante"].
+fn ler_premios<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let mut r = BTreeMap::new();
+    if let serde_json::Value::Object(m) = v {
+        for (k, x) in m {
+            let lista: Vec<String> = match x {
+                serde_json::Value::String(s) if !s.is_empty() => vec![s],
+                serde_json::Value::Array(a) => a.into_iter().filter_map(|y| y.as_str().map(String::from)).collect(),
+                _ => Vec::new(),
+            };
+            if !lista.is_empty() {
+                r.insert(k, lista);
+            }
+        }
+    }
+    Ok(r)
 }
 
 pub fn ler_eventos(json: &str) -> Result<Vec<Evento>, String> {

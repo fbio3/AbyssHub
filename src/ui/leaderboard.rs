@@ -331,6 +331,10 @@ impl AbyssHubApp {
             Some(tex) => desenho::imagem_recortada(pt, tex, r, raio, Color32::WHITE),
             None => desenho::desenhar_avatar(pt, &self.p, &item.nome, &item.uid, r, self.escuro, true),
         }
+        // moldura (as animadas pedem para redesenhar)
+        if !item.moldura.is_empty() && desenho::moldura(pt, &item.moldura, centro, raio, self.an.agora, 1.0) {
+            self.an.ativo = true;
+        }
     }
 
     /// Ícone do jogo num retângulo (ou a inicial, se não tiver).

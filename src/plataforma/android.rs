@@ -402,6 +402,15 @@ impl Plataforma for PlataformaAndroid {
         }
     }
 
+    fn usar_moldura(&self, id: &str) -> Result<(), String> {
+        let r = self.estatico_texto("usarMoldura", &[id])?;
+        if r.is_empty() {
+            Ok(())
+        } else {
+            Err(r)
+        }
+    }
+
     fn publicar_historico(&self, json: &str) -> Result<(), String> {
         let r = self.estatico_texto("publicarHistorico", &[json])?;
         if r.is_empty() {
@@ -436,6 +445,15 @@ impl Plataforma for PlataformaAndroid {
 
     fn evento_editar(&self, evento: &str, jogos: &str) {
         let _ = self.estatico_texto("eventoEditar", &[evento, jogos]);
+    }
+
+    fn evento_premios(&self, id: &str, premios: &str) -> Result<(), String> {
+        let r = self.estatico_texto("eventoPremios", &[id, premios])?;
+        if r.is_empty() {
+            Ok(())
+        } else {
+            Err(r)
+        }
     }
 
     fn evento_apagar(&self, id: &str) {

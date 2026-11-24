@@ -1,5 +1,14 @@
 # Mudanças do AbyssHub
 
+## v3.1.0 — Molduras
+
+- **Molduras da foto de perfil**: Ruby (a mais rara, animada com brilho e joias girando), Diamante (brilho que passa pela borda) e Bronze.
+- Em Configurações > **Moldura da foto**, uma tela nova mostra todas as molduras: toque em cada uma para ver como fica na sua foto. As que você ainda não tem aparecem mais escuras e com cadeado. Dá para ficar sem moldura.
+- A moldura aparece em volta da sua foto no Leaderboard, no Placar e nos Eventos.
+- **Eventos com molduras de recompensa**: o criador escolhe as molduras de cada colocação (1º, 2º, 3º...), pode dar mais de uma moldura para o mesmo lugar e mudar as recompensas a qualquer hora pelo botão **Recompensas** no cartão do evento (mesmo com o evento acontecendo).
+- Cada moldura mostra como conseguir: Ruby (primeiro lugar em eventos), Diamante (segundo lugar) e Bronze (terceiro lugar).
+- As molduras são entregues sozinhas para os vencedores até 1 hora depois que o evento acaba, e o app avisa quando você ganha uma.
+
 ## v3.0.0 — Placar e Eventos
 
 - **Nova aba Placar**: os 3 primeiros de cada dia, semana (segunda a domingo) ou mês, do mais recente que acabou para o mais antigo. Mais períodos aparecem conforme você desce a tela.

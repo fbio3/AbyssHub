@@ -167,6 +167,9 @@ pub struct ItemRanking {
     /// Onde o jogo existe: "mobile", "steam", "psn" (um ou mais).
     #[serde(default)]
     pub plats: Vec<String>,
+    /// Moldura da foto ("ruby", "diamante", "bronze" ou vazio).
+    #[serde(default)]
+    pub moldura: String,
 }
 
 /// Chave de um jogo pelo nome, para juntar o mesmo jogo instalado de lojas diferentes

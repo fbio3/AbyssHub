@@ -6,6 +6,7 @@ mod desenho;
 mod eventos;
 mod imagens;
 mod leaderboard;
+mod molduras;
 mod placar;
 mod rolagem;
 mod telas;
@@ -141,6 +142,13 @@ pub struct AbyssHubApp {
     periodo: Periodo,
     aba: Aba,
     detalhe: Option<String>,
+    /// tela de escolher a moldura da foto aberta
+    molduras_aberta: bool,
+    /// moldura que a pessoa tocou para ver como fica (None = a que está usando)
+    moldura_prev: Option<String>,
+    rx_moldura: Option<mpsc::Receiver<(String, Result<(), String>)>>,
+    /// molduras que a pessoa já tinha (para avisar quando ganhar uma nova)
+    molduras_vistas: Option<Vec<String>>,
     ajustes_aberto: bool,
     /// nas configurações, mostrar a lista inteira de apps (e não só os 10 primeiros)
     ajustes_todos_apps: bool,
@@ -216,6 +224,9 @@ pub struct AbyssHubApp {
     ev_versao: i64,
     ev_ultimo_check: Option<Instant>,
     rx_ev: Option<mpsc::Receiver<Result<Vec<Evento>, String>>>,
+    /// editando as molduras de recompensa de um evento: (id, lugar -> molduras)
+    ev_premios_edit: Option<(String, std::collections::BTreeMap<String, Vec<String>>)>,
+    rx_ev_premios: Option<mpsc::Receiver<Result<(), String>>>,
     /// resultados por consulta (modo/período/jogo) e quando chegaram
     lb_cache: HashMap<String, (Vec<ItemRanking>, Instant)>,
     lb_rx: Option<mpsc::Receiver<leaderboard::Resposta>>,
@@ -272,6 +283,10 @@ impl AbyssHubApp {
             periodo: Periodo::Semana,
             aba: Aba::Inicio,
             detalhe: None,
+            molduras_aberta: false,
+            moldura_prev: None,
+            rx_moldura: None,
+            molduras_vistas: None,
             ajustes_aberto: false,
             ajustes_todos_apps: false,
             dia_sel: None,
@@ -328,6 +343,8 @@ impl AbyssHubApp {
             ev_versao: 0,
             ev_ultimo_check: None,
             rx_ev: None,
+            ev_premios_edit: None,
+            rx_ev_premios: None,
             lb_cache,
             lb_rx: None,
             lb_pedido: None,
@@ -363,7 +380,11 @@ impl AbyssHubApp {
     }
 
     pub(crate) fn ir_para_aba(&mut self, aba: Aba) {
-        if self.detalhe.is_some() {
+        if self.molduras_aberta {
+            self.molduras_aberta = false;
+            self.aba = aba;
+            self.trocar_pagina(-1.0);
+        } else if self.detalhe.is_some() {
             self.detalhe = None;
             self.aba = aba;
             self.trocar_pagina(-1.0);
@@ -837,6 +858,18 @@ impl AbyssHubApp {
             if nova.estado == EstadoConta::Erro && self.conta.estado == EstadoConta::Entrando {
                 self.mostrar_toast(nova.msg.clone(), true);
             }
+            // ganhou moldura nova (de um evento): avisa
+            if nova.estado == EstadoConta::Logado {
+                if let Some(antes) = &self.molduras_vistas {
+                    if let Some(m) = nova.molduras.iter().find(|m| !antes.contains(m)) {
+                        let nome = crate::molduras::nome(m).to_string();
+                        self.mostrar_toast(format!("Você ganhou a moldura {nome}!"), false);
+                    }
+                }
+                self.molduras_vistas = Some(nova.molduras.clone());
+            } else {
+                self.molduras_vistas = None;
+            }
             self.conta = nova;
             self.ultimo_check_conta = Some(Instant::now());
         }
@@ -936,6 +969,8 @@ impl eframe::App for AbyssHubApp {
                 self.upd_aberto = false;
             } else if self.ajustes_aberto {
                 self.ajustes_aberto = false;
+            } else if self.molduras_aberta {
+                self.fechar_molduras();
             } else if self.detalhe.is_some() {
                 self.fechar_detalhe();
             }

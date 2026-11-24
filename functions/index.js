@@ -274,6 +274,69 @@ export const psnDesconectar = onCall(opcoes, async (req) => {
 // ---------------------------------------------------------------------------
 
 const EVENTOS = db.collection("abysshub_eventos");
+const HISTORICO = db.collection("abysshub_historico");
+const MOLDURAS = db.collection("abysshub_molduras");
+const MOLDURAS_VALIDAS = new Set(["ruby", "diamante", "bronze"]);
+/** Espera um pouco depois do fim do evento, para quem jogou no finalzinho conseguir enviar o tempo. */
+const ESPERA_PREMIO_MS = 60 * 60 * 1000;
+
+/** Quem jogou mais no evento (mesma conta do app: historico.rs -> Evento::ranking). */
+function rankingEvento(e, docs) {
+  const pl = String(e.plataforma || "todas");
+  const ini = e.tipo === "tudo" ? "0000-01-01" : String(e.inicio || "");
+  const fim = String(e.fim || "9999-12-31");
+  const jogo = String(e.jogo_chave || "");
+  const v = [];
+  for (const d of docs) {
+    const h = d.data();
+    let ms = 0;
+    if (jogo) {
+      for (const [dia, js] of Object.entries(h.jogos || {})) {
+        if (dia >= ini && dia <= fim) ms += Number(js?.[jogo]?.[pl] || 0);
+      }
+    } else {
+      for (const [dia, m] of Object.entries(h.dias || {})) {
+        if (dia >= ini && dia <= fim) ms += Number(m?.[pl] || 0);
+      }
+    }
+    if (ms > 0) v.push({ uid: String(h.uid || d.id), nome: String(h.nome || ""), ms });
+  }
+  v.sort((a, b) => b.ms - a.ms || a.nome.toLowerCase().localeCompare(b.nome.toLowerCase()));
+  return v;
+}
+
+/** Entrega as molduras dos eventos que acabaram. */
+async function entregarMolduras(agora) {
+  const pendentes = await EVENTOS.where("premiado", "==", false).get();
+  let historicos = null;
+  for (const d of pendentes.docs) {
+    const e = d.data();
+    if (!(Number(e.fim_ms) > 0 && Number(e.fim_ms) + ESPERA_PREMIO_MS <= agora)) continue;
+    const premios = e.premios || {};
+    if (Object.keys(premios).length > 0) {
+      historicos ??= (await HISTORICO.get()).docs;
+      const r = rankingEvento(e, historicos);
+      const n = Math.min(10, Math.max(1, Number(e.vencedores) || 3));
+      for (let i = 0; i < Math.min(n, r.length); i++) {
+        // "1": ["ruby", "diamante"] (ou o formato antigo, "1": "ruby")
+        const valor = premios[String(i + 1)];
+        const lista = (Array.isArray(valor) ? valor : [valor]).filter((m) => MOLDURAS_VALIDAS.has(m));
+        if (lista.length === 0) continue;
+        await MOLDURAS.doc(r[i].uid).set(
+          {
+            tem: FieldValue.arrayUnion(...lista),
+            ganhas: FieldValue.arrayUnion(
+              ...lista.map((m) => ({ moldura: m, evento: d.id, nome_evento: String(e.nome || ""), lugar: i + 1 })),
+            ),
+          },
+          { merge: true },
+        );
+        logger.info(`Molduras ${lista.join(", ")} para ${r[i].nome} (${i + 1}º em ${e.nome})`);
+      }
+    }
+    await d.ref.update({ premiado: true });
+  }
+}
 const TOPICO_EVENTOS = "abysshub_eventos"; // o app se inscreve nesse tópico
 
 async function avisar(titulo, texto) {
@@ -322,11 +385,23 @@ export const avisarEventos = onSchedule(
       const e = d.data();
       if (!(Number(e.fim_ms) > 0 && Number(e.fim_ms) <= agora)) continue;
       try {
-        await avisar(`Terminou: ${e.nome}`, "Veja quem ganhou na aba Eventos do AbyssHub.");
+        const temPremio = Object.keys(e.premios || {}).length > 0;
+        await avisar(
+          `Terminou: ${e.nome}`,
+          temPremio
+            ? "Veja quem ganhou na aba Eventos. As molduras chegam em até 1 hora."
+            : "Veja quem ganhou na aba Eventos do AbyssHub.",
+        );
       } catch (err) {
         logger.warn("Não deu para avisar o fim do evento", d.id, String(err?.message ?? err));
       }
       await d.ref.update({ avisado_fim: true });
+    }
+
+    try {
+      await entregarMolduras(agora);
+    } catch (err) {
+      logger.error("Erro entregando as molduras", String(err?.message ?? err));
     }
   },
 );

@@ -27,6 +27,8 @@ pub struct PlataformaDesktop {
     eventos: Mutex<(Vec<serde_json::Value>, i64)>,
     /// dia "escolhido" no calendário de teste
     data: Mutex<Option<String>>,
+    /// moldura usando e molduras que a conta de teste tem
+    molduras: Mutex<(String, Vec<String>)>,
 }
 
 /// Jogos da Steam de teste: (appid, nome, minutos). "Abyss Knight" também existe no "celular"
@@ -52,6 +54,7 @@ impl PlataformaDesktop {
             fontes: Mutex::new([false; 2]),
             eventos: Mutex::new((eventos_de_teste(), 0)),
             data: Mutex::new(None),
+            molduras: Mutex::new((String::new(), vec!["diamante".into(), "bronze".into()])),
         }
     }
 }
@@ -127,6 +130,8 @@ impl Plataforma for PlataformaDesktop {
 
     fn conta(&self) -> Conta {
         let provedores = self.logado.lock().unwrap().clone();
+        // trava uma vez só (travar o mesmo Mutex duas vezes na mesma linha congela o app)
+        let (moldura, molduras) = self.molduras.lock().unwrap().clone();
         if !provedores.is_empty() {
             Conta {
                 estado: EstadoConta::Logado,
@@ -137,6 +142,8 @@ impl Plataforma for PlataformaDesktop {
                 email: "teste@exemplo.com".into(),
                 provedores,
                 criador: true,
+                moldura,
+                molduras,
             }
         } else {
             Conta {
@@ -184,6 +191,15 @@ impl Plataforma for PlataformaDesktop {
         Ok(())
     }
 
+    fn usar_moldura(&self, id: &str) -> Result<(), String> {
+        let mut g = self.molduras.lock().unwrap();
+        if !id.is_empty() && !g.1.iter().any(|m| m == id) {
+            return Err("Você ainda não tem essa moldura".into());
+        }
+        g.0 = id.to_string();
+        Ok(())
+    }
+
     fn historicos(&self) -> Result<String, String> {
         Ok(historicos_de_teste().to_string())
     }
@@ -214,6 +230,18 @@ impl Plataforma for PlataformaDesktop {
             g.0.push(evento_teste(&format!("teste{n}"), &format!("Evento de teste {n}"), "semana", ini, fim, ""));
         }
         g.1 += 1;
+    }
+
+    fn evento_premios(&self, id: &str, premios: &str) -> Result<(), String> {
+        let novos: serde_json::Value = serde_json::from_str(premios).map_err(|e| e.to_string())?;
+        let mut g = self.eventos.lock().unwrap();
+        for e in g.0.iter_mut() {
+            if e.get("id").and_then(|x| x.as_str()) == Some(id) {
+                e["premios"] = novos.clone();
+            }
+        }
+        g.1 += 1;
+        Ok(())
     }
 
     fn evento_apagar(&self, id: &str) {
@@ -341,12 +369,14 @@ impl Plataforma for PlataformaDesktop {
                     _ => 20,
                 };
                 let ms = base * fator / 3 * parte / 100;
+                let moldura = ["ruby", "diamante", "bronze", ""][i % 4];
                 itens.push(serde_json::json!({
                     "uid": uid, "nome": nome, "foto": "",
                     "pacote": APPS[j].0, "jogo": APPS[j].1,
                     "chave": crate::ranking::chave_jogo(APPS[j].1, APPS[j].0),
                     "ms": ms, "atualizado_ms": agora_ms() - (i as i64) * 90_000,
                     "plats": pl,
+                    "moldura": moldura,
                 }));
             }
         }
@@ -368,12 +398,13 @@ fn evento_teste(
     serde_json::json!({
         "id": id, "nome": nome,
         "descricao": "Quem jogar mais nesse período ganha. Evento só para testar no PC.",
-        "recompensas": "1º lugar: moldura dourada\n2º lugar: moldura prateada\n3º lugar: moldura de bronze",
+        "recompensas": "Os 3 primeiros ganham uma moldura para a foto!",
         "tipo": tipo, "inicio": fmt_dia(ini), "fim": fmt_dia(fim),
         "inicio_ms": inicio_ms(ini), "fim_ms": inicio_ms(mais_dias(fim, 1)),
         "plataforma": "todas",
         "jogo_chave": crate::ranking::chave_jogo(jogo, ""), "jogo_nome": jogo,
         "vencedores": 3, "criado_ms": agora_ms(),
+        "premios": { "1": ["ruby", "diamante"], "2": ["diamante"], "3": ["bronze"] },
     })
 }
 
@@ -428,8 +459,10 @@ fn historicos_de_teste() -> serde_json::Value {
                 serde_json::json!({ "nome": a.1, "pacote": a.0, "plats": ["mobile"] }),
             );
         }
+        let moldura = ["", "ruby", "diamante", "bronze"][i % 4];
         v.push(serde_json::json!({
             "uid": uid, "nome": nome, "foto": "", "atualizado_ms": agora_ms(),
+            "moldura": moldura,
             "dias": dias, "jogos": jogos, "info": info,
         }));
     }

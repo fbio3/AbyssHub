@@ -537,3 +537,161 @@ pub fn botao_icone(ui: &mut Ui, an: &mut Animador, p: &Paleta, chave: &str, qual
     icone(painter, qual, r.center(), 22.0, p.on_hero, giro);
     resp
 }
+
+
+// ---------- Molduras da foto de perfil ----------
+
+fn com_alfa(c: Color32, a: f32) -> Color32 {
+    alfa(c, a.clamp(0.0, 1.0))
+}
+
+/// Anel feito de pedacinhos, com a cor de cada pedaço vinda de `cor(ângulo)`.
+fn anel(p: &Painter, c: Pos2, raio: f32, largura: f32, a: f32, cor: impl Fn(f32) -> Color32) {
+    let n = 72;
+    for i in 0..n {
+        let a0 = i as f32 / n as f32 * TAU;
+        let a1 = (i + 1) as f32 / n as f32 * TAU + 0.01;
+        let meio = (a0 + a1) / 2.0;
+        p.line_segment(
+            [
+                c + vec2(a0.cos(), a0.sin()) * raio,
+                c + vec2(a1.cos(), a1.sin()) * raio,
+            ],
+            Stroke::new(largura, com_alfa(cor(meio), a)),
+        );
+    }
+}
+
+/// Brilho de 4 pontas.
+fn faisca(p: &Painter, c: Pos2, tam: f32, cor: Color32) {
+    if tam < 0.3 {
+        return;
+    }
+    let f = tam * 0.28;
+    let pts = vec![
+        c + vec2(0.0, -tam),
+        c + vec2(f, -f),
+        c + vec2(tam, 0.0),
+        c + vec2(f, f),
+        c + vec2(0.0, tam),
+        c + vec2(-f, f),
+        c + vec2(-tam, 0.0),
+        c + vec2(-f, -f),
+    ];
+    p.add(Shape::convex_polygon(pts, cor, Stroke::NONE));
+}
+
+/// Joia (losango) com reflexo.
+fn joia(p: &Painter, c: Pos2, tam: f32, cor: Color32, a: f32) {
+    let pts = vec![
+        c + vec2(0.0, -tam),
+        c + vec2(tam * 0.75, 0.0),
+        c + vec2(0.0, tam),
+        c + vec2(-tam * 0.75, 0.0),
+    ];
+    p.add(Shape::convex_polygon(pts, com_alfa(cor, a), Stroke::new(1.0, com_alfa(Color32::WHITE, 0.6 * a))));
+    p.circle_filled(c + vec2(-tam * 0.2, -tam * 0.3), tam * 0.22, com_alfa(Color32::WHITE, 0.85 * a));
+}
+
+/// Desenha a moldura `id` em volta de uma foto redonda (centro `c`, raio `r`).
+/// `t` = tempo em segundos (anima). Devolve true se a moldura é animada (precisa redesenhar).
+pub fn moldura(p: &Painter, id: &str, c: Pos2, r: f32, t: f64, a: f32) -> bool {
+    let t = t as f32;
+    let w = (r * 0.17).clamp(2.5, 9.0);
+    let rr = r + w * 0.5 - 0.5;
+    match id {
+        "ruby" => {
+            // brilho pulsando por fora
+            let pulso = 0.5 + 0.5 * (t * 2.4).sin();
+            for k in 0..4 {
+                let k = k as f32;
+                p.circle_stroke(
+                    c,
+                    rr + w * 0.5 + 1.5 + k * w * 0.35,
+                    Stroke::new(w * 0.45, com_alfa(Color32::from_rgb(0xff, 0x2a, 0x4a), (0.22 - k * 0.05) * (0.5 + 0.5 * pulso) * a)),
+                );
+            }
+            // anel com o vermelho "correndo" em volta
+            let escuro = Color32::from_rgb(0x7a, 0x05, 0x18);
+            let claro = Color32::from_rgb(0xff, 0x3d, 0x5e);
+            anel(p, c, rr, w, a, |ang| {
+                let v = 0.5 + 0.5 * (ang * 3.0 - t * 2.2).sin();
+                misturar_cor(escuro, claro, v)
+            });
+            // fio dourado por dentro
+            p.circle_stroke(c, r + 0.5, Stroke::new((w * 0.18).max(1.0), com_alfa(Color32::from_rgb(0xff, 0xd2, 0x6a), 0.9 * a)));
+            // 4 joias girando
+            for k in 0..4 {
+                let ang = t * 0.6 + k as f32 * TAU / 4.0;
+                joia(p, c + vec2(ang.cos(), ang.sin()) * rr, w * 0.95, Color32::from_rgb(0xe0, 0x10, 0x3a), a);
+            }
+            // faíscas piscando
+            for k in 0..3 {
+                let ang = -t * 0.9 + k as f32 * TAU / 3.0 + 0.5;
+                let brilho = (t * 3.1 + k as f32 * 2.0).sin().max(0.0).powi(2);
+                faisca(
+                    p,
+                    c + vec2(ang.cos(), ang.sin()) * (rr + w * 0.9),
+                    w * 1.1 * brilho,
+                    com_alfa(Color32::WHITE, brilho * a),
+                );
+            }
+            true
+        }
+        "diamante" => {
+            // anel de cristal com um brilho que passa
+            let base = Color32::from_rgb(0x6f, 0xb8, 0xe8);
+            let claro = Color32::from_rgb(0xf4, 0xfb, 0xff);
+            let pos = (t * 1.4) % TAU;
+            anel(p, c, rr, w, a, |ang| {
+                let mut d = (ang - pos).abs() % TAU;
+                if d > PI {
+                    d = TAU - d;
+                }
+                let brilho = (1.0 - d / 0.9).max(0.0);
+                let facetas = 0.15 * (ang * 8.0).sin().abs();
+                misturar_cor(base, claro, (brilho + facetas).min(1.0))
+            });
+            p.circle_stroke(c, r + 0.5, Stroke::new((w * 0.16).max(1.0), com_alfa(Color32::WHITE, 0.7 * a)));
+            // duas faíscas
+            for k in 0..2 {
+                let ang = pos + k as f32 * PI;
+                let brilho = (t * 2.0 + k as f32 * 1.7).sin().max(0.0);
+                faisca(
+                    p,
+                    c + vec2(ang.cos(), ang.sin()) * (rr + w * 0.6),
+                    w * 0.9 * brilho,
+                    com_alfa(Color32::WHITE, brilho * a),
+                );
+            }
+            true
+        }
+        "bronze" => {
+            // borda de bronze parada, com luz vindo de cima
+            let escuro = Color32::from_rgb(0x6e, 0x3f, 0x1b);
+            let claro = Color32::from_rgb(0xd9, 0x96, 0x52);
+            anel(p, c, rr, w * 0.85, a, |ang| {
+                let v = 0.5 - 0.5 * ang.sin();
+                misturar_cor(escuro, claro, v)
+            });
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Cadeado (molduras que a pessoa ainda não tem).
+pub fn cadeado(p: &Painter, c: Pos2, tam: f32, cor: Color32) {
+    let s = tam / 24.0;
+    let corpo = Rect::from_center_size(c + vec2(0.0, 3.0 * s), vec2(16.0 * s, 12.0 * s));
+    p.rect_filled(corpo, CornerRadius::same((3.0 * s) as u8), cor);
+    let arco: Vec<Pos2> = (0..=16)
+        .map(|i| {
+            let ang = PI + i as f32 / 16.0 * PI;
+            c + vec2(0.0, -3.0 * s) + vec2(ang.cos() * 5.0 * s, ang.sin() * 6.0 * s)
+        })
+        .collect();
+    p.add(Shape::line(arco, Stroke::new(2.2 * s, cor)));
+    p.line_segment([c + vec2(-5.0 * s, -3.0 * s), c + vec2(-5.0 * s, -3.0 * s + 0.5)], Stroke::new(2.2 * s, cor));
+    p.line_segment([c + vec2(5.0 * s, -3.0 * s), c + vec2(5.0 * s, -3.0 * s + 0.5)], Stroke::new(2.2 * s, cor));
+}

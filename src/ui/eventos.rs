@@ -178,6 +178,113 @@ impl AbyssHubApp {
         });
     }
 
+    /// Escolher as molduras de cada colocação (pode marcar várias por lugar). Só o criador.
+    fn editor_premios(&mut self, ui: &mut Ui, e: &Evento) {
+        self.receber_premios();
+        let p = self.p;
+        let t = self.an.agora;
+        let Some((_, mut mapa)) = self.ev_premios_edit.clone() else { return };
+        let mut mudou = false;
+        let mut animada = false;
+        Frame::default()
+            .fill(p.chip)
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin::same(12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(txt("Molduras de recompensa", 14.0, Peso::Negrito, p.text));
+                ui.label(txt(
+                    "Toque para marcar ou desmarcar. Cada lugar pode ganhar mais de uma.",
+                    12.0,
+                    Peso::Normal,
+                    p.muted,
+                ));
+                for pos in 0..e.qtd_vencedores() {
+                    let chave = (pos + 1).to_string();
+                    ui.add_space(4.0);
+                    ui.label(txt(format!("{}º lugar", pos + 1), 13.0, Peso::Semi, p.text));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (id, nome, _) in crate::molduras::TODAS {
+                            let marcada = mapa.get(&chave).is_some_and(|v| v.iter().any(|m| m == id));
+                            let g = ui.painter().layout_no_wrap(nome.to_string(), fonte(12.5, Peso::Semi), p.text);
+                            let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 44.0, 34.0), Sense::click());
+                            let pt = ui.painter().clone();
+                            pt.rect_filled(r, CornerRadius::same(17), if marcada { p.chip_on } else { p.card });
+                            let c = r.left_center() + vec2(18.0, 0.0);
+                            pt.circle_filled(c, 9.0, p.chip);
+                            animada |= desenho::moldura(&pt, id, c, 9.0, t, if marcada { 1.0 } else { 0.5 });
+                            pt.galley(
+                                r.left_center() + vec2(34.0, -g.size().y / 2.0),
+                                g,
+                                if marcada { p.chip_on_ink } else { p.text },
+                            );
+                            if resp.clicked() {
+                                let v = mapa.entry(chave.clone()).or_default();
+                                if marcada {
+                                    v.retain(|m| m != id);
+                                } else {
+                                    v.push(id.to_string());
+                                }
+                                if v.is_empty() {
+                                    mapa.remove(&chave);
+                                }
+                                mudou = true;
+                            }
+                        }
+                    });
+                }
+                ui.add_space(6.0);
+                let salvando = self.rx_ev_premios.is_some();
+                let mut salvar = false;
+                let mut cancelar = false;
+                ui.columns(2, |c| {
+                    salvar = botao(&mut c[0], &mut self.an, &p, "ev_pr_salvar", if salvando { "Salvando..." } else { "Salvar" }, true)
+                        .clicked();
+                    cancelar = botao(&mut c[1], &mut self.an, &p, "ev_pr_cancelar", "Cancelar", false).clicked();
+                });
+                if salvar && !salvando {
+                    let json = serde_json::to_string(&mapa).unwrap_or_else(|_| "{}".into());
+                    let plat = self.plat.clone();
+                    let id = e.id.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.rx_ev_premios = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(plat.evento_premios(&id, &json));
+                    });
+                }
+                if cancelar {
+                    self.ev_premios_edit = None;
+                }
+            });
+        if mudou {
+            if let Some((_, m)) = &mut self.ev_premios_edit {
+                *m = mapa;
+            }
+        }
+        if animada {
+            self.an.ativo = true;
+        }
+    }
+
+    fn receber_premios(&mut self) {
+        let Some(rx) = &self.rx_ev_premios else { return };
+        let r = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Não deu para salvar".into()),
+        };
+        self.rx_ev_premios = None;
+        match r {
+            Ok(()) => {
+                self.ev_premios_edit = None;
+                self.ev_pedido = None; // recarrega os eventos
+                self.mostrar_toast("Recompensas salvas", false);
+            }
+            Err(e) => self.mostrar_toast(e, true),
+        }
+    }
+
     /// Jogos para o formulário de evento: [[chave, nome], ...]
     fn jogos_json(&self) -> String {
         let v: Vec<(String, String)> = self.jogos_placar().into_iter().map(|(c, _, n)| (c, n)).collect();
@@ -242,9 +349,15 @@ impl AbyssHubApp {
             ui.label(txt(e.descricao.trim(), 13.5, Peso::Normal, p.text));
         }
 
-        // recompensas
-        if !e.recompensas.trim().is_empty() {
+        // recompensas (texto do criador + molduras de cada colocação)
+        let premios: Vec<(usize, Vec<&str>)> = (0..e.qtd_vencedores())
+            .map(|i| (i, e.premios_de(i)))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        if !e.recompensas.trim().is_empty() || !premios.is_empty() {
             ui.add_space(2.0);
+            let t = self.an.agora;
+            let mut animada = false;
             Frame::default()
                 .fill(p.chip)
                 .corner_radius(CornerRadius::same(12))
@@ -256,8 +369,39 @@ impl AbyssHubApp {
                         desenho::icone(ui.painter(), Icone::Trofeu, r.center(), 18.0, p.gold, 0.0);
                         ui.label(txt("Recompensas", 13.5, Peso::Negrito, p.text));
                     });
-                    ui.label(txt(e.recompensas.trim(), 13.0, Peso::Normal, p.text));
+                    if !e.recompensas.trim().is_empty() {
+                        ui.label(txt(e.recompensas.trim(), 13.0, Peso::Normal, p.text));
+                    }
+                    for (i, ms) in &premios {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for m in ms {
+                                let (r, _) = ui.allocate_exact_size(vec2(32.0, 34.0), Sense::hover());
+                                ui.painter().circle_filled(r.center(), 10.0, p.card);
+                                animada |= desenho::moldura(ui.painter(), m, r.center(), 10.0, t, 1.0);
+                            }
+                            ui.add_space(4.0);
+                            let nomes: Vec<&str> = ms.iter().map(|m| crate::molduras::nome(m)).collect();
+                            let texto = if ms.len() == 1 {
+                                format!("{}º lugar: moldura {}", i + 1, nomes[0])
+                            } else {
+                                format!("{}º lugar: molduras {}", i + 1, nomes.join(" + "))
+                            };
+                            ui.add(egui::Label::new(txt(texto, 13.0, Peso::Semi, p.text)).wrap());
+                        });
+                    }
+                    if !premios.is_empty() {
+                        ui.label(txt(
+                            "As molduras são entregues sozinhas quando o evento acaba.",
+                            11.5,
+                            Peso::Normal,
+                            p.muted,
+                        ));
+                    }
                 });
+            if animada {
+                self.an.ativo = true;
+            }
         }
 
         // quem está na frente / vencedores
@@ -296,12 +440,21 @@ impl AbyssHubApp {
 
         if criador {
             ui.add_space(4.0);
+            let editando = self.ev_premios_edit.as_ref().is_some_and(|(id, _)| *id == e.id);
+            if editando {
+                self.editor_premios(ui, e);
+            }
             let mut editar = false;
             let mut apagar = false;
-            ui.columns(2, |c| {
+            let mut premios = false;
+            ui.columns(3, |c| {
                 editar = botao(&mut c[0], &mut self.an, &p, &format!("ev_ed_{}", e.id), "Editar", false).clicked();
-                apagar = botao(&mut c[1], &mut self.an, &p, &format!("ev_ap_{}", e.id), "Apagar", false).clicked();
+                premios = botao(&mut c[1], &mut self.an, &p, &format!("ev_pr_{}", e.id), "Recompensas", false).clicked();
+                apagar = botao(&mut c[2], &mut self.an, &p, &format!("ev_ap_{}", e.id), "Apagar", false).clicked();
             });
+            if premios {
+                self.ev_premios_edit = if editando { None } else { Some((e.id.clone(), e.premios.clone())) };
+            }
             if editar {
                 let ev = serde_json::to_string(e).unwrap_or_default();
                 let jogos = self.jogos_json();
